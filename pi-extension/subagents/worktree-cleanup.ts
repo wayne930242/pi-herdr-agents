@@ -10,6 +10,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+	closeOpenedPrimaryWorkspace,
 	getHerdrPaneProcessInfo,
 	listHerdrPanes,
 	listHerdrWorktrees,
@@ -68,6 +69,11 @@ export interface WorktreeCleanupOperations {
 	exists(path: string): boolean;
 	preserve(entry: WorktreeInventoryEntry): string;
 	removeWorkspace(id: string): void;
+	/** Close the primary workspace a create call opened, once nothing uses it. */
+	closeOpenedPrimaryWorkspace(
+		sourceRepo: string,
+		claimed: ReadonlySet<string>,
+	): { note: string; closedWorkspaceId?: string } | undefined;
 	removeCheckout(sourceRepo: string, path: string): void;
 	prune(sourceRepo: string): void;
 	writeManifest(file: string, value: JsonObject): void;
@@ -360,6 +366,34 @@ export async function removeContainedWorktree(
 		checkoutRemoved = true;
 		if (!entry.workspaceId) ops.prune(entry.sourceRepo);
 		const warnings: string[] = [];
+		let primaryNote = "";
+		if (entry.workspaceId) {
+			try {
+				const claims = ops
+					.readManifests()
+					.filter(({ value }) => isString(value.openedPrimaryWorkspaceId));
+				const closed = claims.length
+					? ops.closeOpenedPrimaryWorkspace(
+							entry.sourceRepo,
+							new Set(
+								claims.map(({ value }) =>
+									String(value.openedPrimaryWorkspaceId),
+								),
+							),
+						)
+					: undefined;
+				if (closed) primaryNote = ` ${closed.note}`;
+				// A consumed claim must not match a later, unrelated workspace id.
+				for (const { file, value } of claims)
+					if (closed?.closedWorkspaceId === value.openedPrimaryWorkspaceId)
+						ops.writeManifest(file, {
+							openedPrimaryWorkspaceId: undefined,
+							primaryWorkspaceClosedAt: Date.now(),
+						});
+			} catch (error) {
+				warnings.push(`Primary workspace cleanup failed: ${message(error)}`);
+			}
+		}
 		for (const manifest of entry.manifest) {
 			try {
 				ops.writeManifest(manifest.file, {
@@ -376,7 +410,7 @@ export async function removeContainedWorktree(
 			status: "removed",
 			entry,
 			preservationSha,
-			message: `Removed ${entry.path}. Branch ${entry.branch} and its commits retained.${preservationSha ? ` Preservation commit: ${preservationSha}.` : ""}${ignoredNotice()}${warnings.length ? ` Warning: ${warnings.join("; ")}` : entry.manifest.length ? " Manifest marked removed." : " No reachable manifest (orphan)."}`,
+			message: `Removed ${entry.path}. Branch ${entry.branch} and its commits retained.${preservationSha ? ` Preservation commit: ${preservationSha}.` : ""}${ignoredNotice()}${primaryNote}${warnings.length ? ` Warning: ${warnings.join("; ")}` : entry.manifest.length ? " Manifest marked removed." : " No reachable manifest (orphan)."}`,
 		});
 	} catch (error) {
 		return finish({
@@ -781,6 +815,8 @@ export function createWorktreeCleanupOperations(input: {
 			return git(entry.path, ["rev-parse", "HEAD"]).trim();
 		},
 		removeWorkspace: (id) => removeHerdrWorktree(id, CLEANUP_TIMEOUT_MS),
+		closeOpenedPrimaryWorkspace: (source, claimed) =>
+			closeOpenedPrimaryWorkspace(source, claimed, CLEANUP_TIMEOUT_MS),
 		removeCheckout: (source, path) => {
 			git(source, ["worktree", "remove", "--", path]);
 		},

@@ -78,6 +78,11 @@ export interface HerdrWorktreeSurface {
 	branch: string;
 	workspaceId: string;
 	paneId: string;
+	/**
+	 * Set only when this create call made Herdr open the source repository's
+	 * primary workspace; a workspace the user already had open is never claimed.
+	 */
+	openedPrimaryWorkspaceId?: string;
 }
 
 function extractHerdrWorktree(output: string): HerdrWorktreeSurface {
@@ -392,14 +397,14 @@ export class HerdrWorktreeCreateError extends Error {
 	readonly recoveredWorktree: Pick<
 		HerdrWorktreeInfo,
 		"path" | "branch" | "workspaceId"
-	>;
+	> & { openedPrimaryWorkspaceId?: string };
 
 	constructor(
 		message: string,
 		recoveredWorktree: Pick<
 			HerdrWorktreeInfo,
 			"path" | "branch" | "workspaceId"
-		>,
+		> & { openedPrimaryWorkspaceId?: string },
 	) {
 		super(message);
 		this.name = "HerdrWorktreeCreateError";
@@ -432,6 +437,28 @@ export function parseHerdrWorktreeList(output: string): HerdrWorktreeInfo[] {
 			info.workspaceId = worktree.open_workspace_id;
 		return info;
 	});
+}
+
+/** Source repository facts returned beside `herdr worktree list` rows. */
+interface HerdrWorktreeSource {
+	repoKey?: string;
+	/** Absent when no workspace is open for the source checkout. */
+	primaryWorkspaceId?: string;
+}
+
+function parseHerdrWorktreeSource(output: string): HerdrWorktreeSource {
+	const parsed = parseHerdrJson(output);
+	if (parsed?.result?.type !== "worktree_list") {
+		throw new Error("Unexpected herdr worktree list output");
+	}
+	const source = parsed.result.source;
+	const info: HerdrWorktreeSource = {};
+	if (isPlainObject(source)) {
+		if (isString(source.repo_key)) info.repoKey = source.repo_key;
+		if (isString(source.source_workspace_id) && source.source_workspace_id)
+			info.primaryWorkspaceId = source.source_workspace_id;
+	}
+	return info;
 }
 
 export function buildWorktreeRemoveArgs(workspaceId: string): string[] {
@@ -521,15 +548,38 @@ function retainWorktreeTab(
 	return worktree;
 }
 
+function readHerdrWorktreeSource(cwd: string): HerdrWorktreeSource | undefined {
+	try {
+		return parseHerdrWorktreeSource(
+			herdrExec(["worktree", "list", "--cwd", cwd]),
+		);
+	} catch {
+		return undefined;
+	}
+}
+
 export function createHerdrWorktree(
 	name: string,
 	cwd: string,
 	branch: string,
 	base: string,
 ): HerdrWorktreeSurface {
+	// Herdr groups a linked worktree with its source repository's primary
+	// workspace and opens one when none exists. Without a trustworthy "before"
+	// snapshot nothing is claimed, so an unreadable snapshot only risks a
+	// leftover workspace, never closing one the user owns.
+	const before = readHerdrWorktreeSource(cwd);
 	const output = herdrExec(buildWorktreeCreateArgs(name, cwd, branch, base));
+	const openedPrimaryWorkspaceId =
+		before && !before.primaryWorkspaceId
+			? readHerdrWorktreeSource(cwd)?.primaryWorkspaceId
+			: undefined;
+	const claim = openedPrimaryWorkspaceId ? { openedPrimaryWorkspaceId } : {};
 	try {
-		return retainWorktreeTab(extractHerdrWorktree(output), output);
+		return {
+			...retainWorktreeTab(extractHerdrWorktree(output), output),
+			...claim,
+		};
 	} catch (parseError) {
 		let recovered: HerdrWorktreeSurface | HerdrWorktreeInfo | undefined;
 		try {
@@ -538,15 +588,69 @@ export function createHerdrWorktree(
 			throw parseError;
 		}
 		if (recovered?.workspaceId && "paneId" in recovered)
-			return retainWorktreeTab(recovered, output);
+			return { ...retainWorktreeTab(recovered, output), ...claim };
 		if (recovered) {
 			throw new HerdrWorktreeCreateError(
 				`Herdr created branch ${branch}, but its workspace response was incomplete`,
-				recovered,
+				{ ...recovered, ...claim },
 			);
 		}
 		throw parseError;
 	}
+}
+
+/**
+ * Close the source repository's primary workspace after its last linked
+ * worktree was removed, but only when an earlier create call opened it
+ * (`claimed`) and nothing else uses it. Returns a human-readable note, or
+ * undefined when no claimed primary workspace exists. Never passes `--group`.
+ */
+export function closeOpenedPrimaryWorkspace(
+	cwd: string,
+	claimed: ReadonlySet<string>,
+	timeout?: number,
+): { note: string; closedWorkspaceId?: string } | undefined {
+	const listing = herdrExec(["worktree", "list", "--cwd", cwd], timeout);
+	const source = parseHerdrWorktreeSource(listing);
+	const id = source.primaryWorkspaceId;
+	if (!id || !claimed.has(id)) return undefined;
+	const keep = (reason: string) => ({
+		note: `Primary workspace ${id} left open: ${reason}.`,
+	});
+	const linked = parseHerdrWorktreeList(listing).filter(
+		(worktree) => worktree.workspaceId && worktree.workspaceId !== id,
+	);
+	if (linked.length)
+		return keep(
+			`linked worktree workspace ${linked.map((worktree) => worktree.workspaceId).join(", ")} still open`,
+		);
+	const workspace = parseHerdrJson(herdrExec(["workspace", "get", id], timeout))
+		?.result?.workspace;
+	const group = workspace?.worktree;
+	if (
+		!isPlainObject(workspace) ||
+		!isPlainObject(group) ||
+		group.is_linked_worktree !== false ||
+		!source.repoKey ||
+		group.repo_key !== source.repoKey
+	)
+		return keep("it is not the source repository's primary workspace");
+	// A renamed or extended workspace is no longer the empty one Herdr opened.
+	if (workspace.label !== group.repo_name) return keep("its label was changed");
+	const panes = parseHerdrPaneList(
+		herdrExec(["pane", "list", "--workspace", id], timeout),
+		id,
+	);
+	if (workspace.tab_count !== 1 || panes.length !== 1)
+		return keep("it holds more than one pane");
+	const info = getHerdrPaneProcessInfo(panes[0], timeout);
+	if (!info.shellPid || info.foregroundProcessGroupId !== info.shellPid)
+		return keep("its pane is not an idle shell");
+	herdrExec(["workspace", "close", id], timeout);
+	return {
+		note: `Closed primary workspace ${id}, which this extension opened.`,
+		closedWorkspaceId: id,
+	};
 }
 
 export function createHerdrSurfaceSplit(
@@ -995,6 +1099,7 @@ export const __herdrTest__ = {
 	extractHerdrRootPaneId,
 	extractHerdrWorktree,
 	parseHerdrWorktreeList,
+	parseHerdrWorktreeSource,
 	parseHerdrPaneList,
 	parsePaneGetOutput,
 	parsePaneGetError,

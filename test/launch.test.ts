@@ -18,6 +18,7 @@ import {
 	type PiLaunchOperations,
 	type ResumePiLaunchRequest,
 } from "../pi-extension/subagents/launch.ts";
+import type { HerdrWorktreeSurface } from "../pi-extension/subagents/herdr.ts";
 import { createSubagentPaneFactory } from "../pi-extension/subagents/pane-config.ts";
 import {
 	readSubagentSessionPolicy,
@@ -946,6 +947,55 @@ describe("Pi launch", () => {
 			assert.equal(manifest.paneId, "root-pane-1");
 		});
 	});
+
+	for (const opened of [true, false]) {
+		it(`${opened ? "records" : "omits"} the primary workspace claim in the worktree manifest`, async () => {
+			await withFixture(async ({ request, project, sessionDir, root }) => {
+				initializeGitRepository(project);
+				writeFileSync(join(project, "base.txt"), "base\n");
+				commitAll(project, "base");
+				const worktreePath = join(root, "claim-tree");
+				const manifestFile = join(
+					sessionDir,
+					"artifacts",
+					"parent",
+					"worktree-runs",
+					"child-1.json",
+				);
+				await launchPiSubagent(
+					{ ...request, worktree: { branch: "issue/claim" } },
+					{
+						createPane() {
+							throw new Error("unexpected pane creation");
+						},
+						createWorktree(_name, cwd, branch, base) {
+							execFileSync(
+								"git",
+								["worktree", "add", "-q", "-b", branch, worktreePath, base],
+								{ cwd },
+							);
+							const surface: HerdrWorktreeSurface = {
+								path: worktreePath,
+								branch,
+								workspaceId: "workspace-1",
+								paneId: "root-pane-1",
+							};
+							if (opened) surface.openedPrimaryWorkspaceId = "primary-1";
+							return surface;
+						},
+						async waitForShellReady() {},
+						runScript: (_surface, _value, options) => options.scriptPath,
+						closePane() {},
+					},
+				);
+				const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+				assert.equal(
+					manifest.openedPrimaryWorkspaceId,
+					opened ? "primary-1" : undefined,
+				);
+			});
+		});
+	}
 
 	it("provisions a linked checkout from its principal while preserving its base", async () => {
 		await withFixture(async ({ request, project, root, sessionDir }) => {

@@ -18,8 +18,13 @@ import {
 	readWorktreeManifest,
 	writeWorktreeManifest,
 } from "../pi-extension/subagents/launch.ts";
-import { __herdrTest__ } from "../pi-extension/subagents/herdr.ts";
 import {
+	__herdrTest__,
+	closeOpenedPrimaryWorkspace,
+	createHerdrWorktree,
+} from "../pi-extension/subagents/herdr.ts";
+import {
+	type CleanupManifest,
 	cleanupBlockers,
 	createWorktreeCleanupOperations,
 	__worktreeCleanupTest__,
@@ -27,6 +32,7 @@ import {
 	removeContainedWorktree,
 	formatWorktreeInventory,
 } from "../pi-extension/subagents/worktree-cleanup.ts";
+import type { JsonObject } from "../pi-extension/subagents/type-guards.ts";
 import { cleanupFixture } from "./worktree-cleanup-fixture.ts";
 
 describe("cleanup process visibility policy", () => {
@@ -1340,5 +1346,350 @@ describe("submodule worktrees", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+/** A `herdr` stand-in that replays numbered canned replies per `<group>-<verb>`. */
+function fakeHerdr(replies: Record<string, JsonObject[]>) {
+	const dir = mkdtempSync(join(tmpdir(), "fake-herdr-"));
+	writeFileSync(
+		join(dir, "herdr"),
+		`#!/bin/sh
+D="$(dirname "$0")"
+echo "$*" >> "$D/calls.log"
+key="$1-$2"
+n=$(cat "$D/$key.n" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$D/$key.n"
+f="$D/$key.$n"
+[ -f "$f" ] || f="$D/$key.last"
+if [ -f "$f" ]; then cat "$f"; else echo '{"error":{"code":"unexpected"}}' >&2; exit 1; fi
+`,
+		{ mode: 0o755 },
+	);
+	for (const [key, list] of Object.entries(replies))
+		list.forEach((reply, index) => {
+			const body = JSON.stringify(reply);
+			writeFileSync(join(dir, `${key}.${index + 1}`), body);
+			if (index === list.length - 1)
+				writeFileSync(join(dir, `${key}.last`), body);
+		});
+	const previous = process.env.PATH;
+	process.env.PATH = `${dir}:/usr/bin:/bin`;
+	return {
+		dir,
+		calls: () => {
+			try {
+				return readFileSync(join(dir, "calls.log"), "utf8")
+					.split("\n")
+					.filter(Boolean);
+			} catch {
+				return [];
+			}
+		},
+		restore: () => {
+			process.env.PATH = previous;
+			rmSync(dir, { recursive: true, force: true });
+		},
+	};
+}
+
+const ok = { id: "x", result: { type: "ok" } };
+function worktreeList(primary: string | undefined, rows: JsonObject[] = []) {
+	const source: JsonObject = { repo_key: "/repo/.git", repo_name: "repo" };
+	const principal: JsonObject = {
+		branch: "main",
+		path: "/repo",
+		is_linked_worktree: false,
+	};
+	if (primary) {
+		source.source_workspace_id = primary;
+		principal.open_workspace_id = primary;
+	}
+	return {
+		result: {
+			type: "worktree_list",
+			source,
+			worktrees: [principal, ...rows],
+		},
+	};
+}
+const created = {
+	result: {
+		type: "worktree_created",
+		workspace: { workspace_id: "w2" },
+		root_pane: { pane_id: "w2:p1" },
+		tab: { tab_id: "w2:t1" },
+		worktree: { path: "/managed/repo/task", branch: "task" },
+	},
+};
+
+describe("primary workspace opened by worktree create", () => {
+	it("claims the primary workspace only when create opened it", () => {
+		for (const [label, replies, claimed, listCalls] of [
+			[
+				"none open before, one after",
+				[worktreeList(undefined), worktreeList("w1")],
+				"w1",
+				2,
+			],
+			[
+				"already open before",
+				[worktreeList("w1"), worktreeList("w1")],
+				undefined,
+				1,
+			],
+			["unreadable snapshot", [], undefined, 1],
+		] as const) {
+			const herdr = fakeHerdr({
+				"worktree-list": [...replies],
+				"worktree-create": [created],
+				"tab-rename": [ok],
+			});
+			try {
+				const surface = createHerdrWorktree("task", "/repo", "task", "HEAD");
+				assert.equal(surface.workspaceId, "w2", label);
+				assert.equal(surface.openedPrimaryWorkspaceId, claimed, label);
+				assert.equal(
+					herdr.calls().filter((call) => call.startsWith("worktree list"))
+						.length,
+					listCalls,
+					label,
+				);
+			} finally {
+				herdr.restore();
+			}
+		}
+	});
+});
+
+describe("closing an opened primary workspace", () => {
+	const workspace = (overrides: JsonObject = {}) => ({
+		result: {
+			type: "workspace_info",
+			workspace: {
+				workspace_id: "w1",
+				label: "repo",
+				tab_count: 1,
+				pane_count: 1,
+				worktree: {
+					is_linked_worktree: false,
+					repo_key: "/repo/.git",
+					repo_name: "repo",
+				},
+				...overrides,
+			},
+		},
+	});
+	const panes = (count: number) => ({
+		result: {
+			type: "pane_list",
+			panes: Array.from({ length: count }, (_, index) => ({
+				pane_id: `w1:p${index + 1}`,
+				workspace_id: "w1",
+			})),
+		},
+	});
+	const processInfo = (foreground: number) => ({
+		result: {
+			type: "pane_process_info",
+			process_info: {
+				pane_id: "w1:p1",
+				shell_pid: 100,
+				foreground_process_group_id: foreground,
+			},
+		},
+	});
+	const claimed = new Set(["w1"]);
+	const cases: Array<{
+		name: string;
+		list?: JsonObject;
+		get?: JsonObject;
+		panes?: JsonObject;
+		info?: JsonObject;
+		claims?: Set<string>;
+		closes: boolean;
+		reason?: RegExp;
+	}> = [
+		{ name: "idle, unmodified, unshared", closes: true },
+		{
+			name: "not claimed by this extension",
+			claims: new Set(["w9"]),
+			closes: false,
+		},
+		{
+			name: "another linked worktree is open",
+			list: worktreeList("w1", [
+				{
+					branch: "other",
+					path: "/managed/repo/other",
+					is_linked_worktree: true,
+					open_workspace_id: "w7",
+				},
+			]),
+			closes: false,
+			reason: /linked worktree workspace w7 still open/,
+		},
+		{
+			name: "label was changed by the user",
+			get: workspace({ label: "my notes" }),
+			closes: false,
+			reason: /label was changed/,
+		},
+		{
+			name: "user added a tab",
+			get: workspace({ tab_count: 2 }),
+			closes: false,
+			reason: /more than one pane/,
+		},
+		{
+			name: "user added a pane",
+			panes: panes(2),
+			closes: false,
+			reason: /more than one pane/,
+		},
+		{
+			name: "a foreground process is running",
+			info: processInfo(4242),
+			closes: false,
+			reason: /not an idle shell/,
+		},
+		{
+			name: "workspace belongs to another repository",
+			get: workspace({
+				worktree: {
+					is_linked_worktree: false,
+					repo_key: "/other/.git",
+					repo_name: "repo",
+				},
+			}),
+			closes: false,
+			reason: /not the source repository's primary/,
+		},
+	];
+	for (const item of cases)
+		it(`${item.closes ? "closes" : "keeps"} the workspace: ${item.name}`, () => {
+			const herdr = fakeHerdr({
+				"worktree-list": [item.list ?? worktreeList("w1")],
+				"workspace-get": [item.get ?? workspace()],
+				"pane-list": [item.panes ?? panes(1)],
+				"pane-process-info": [item.info ?? processInfo(100)],
+				"workspace-close": [ok],
+			});
+			try {
+				const result = closeOpenedPrimaryWorkspace(
+					"/repo",
+					item.claims ?? claimed,
+				);
+				const closeCalls = herdr
+					.calls()
+					.filter((call) => call.startsWith("workspace close"));
+				if (item.closes) {
+					assert.equal(result?.closedWorkspaceId, "w1");
+					// Closing a group is never requested; Herdr guards it anyway.
+					assert.deepEqual(closeCalls, ["workspace close w1"]);
+				} else {
+					assert.equal(result?.closedWorkspaceId, undefined);
+					assert.deepEqual(closeCalls, []);
+					if (item.reason) assert.match(result?.note ?? "", item.reason);
+					else assert.equal(result, undefined);
+				}
+			} finally {
+				herdr.restore();
+			}
+		});
+	it("does nothing when no primary workspace is open", () => {
+		const herdr = fakeHerdr({ "worktree-list": [worktreeList(undefined)] });
+		try {
+			assert.equal(closeOpenedPrimaryWorkspace("/repo", claimed), undefined);
+			assert.deepEqual(herdr.calls(), ["worktree list --cwd /repo"]);
+		} finally {
+			herdr.restore();
+		}
+	});
+});
+
+describe("worktree removal and the opened primary workspace", () => {
+	const manifest = (extra: JsonObject = {}): CleanupManifest => ({
+		file: "/manifest.json",
+		value: {
+			branch: "task",
+			path: "/managed/repo/task",
+			state: "ready_for_review",
+			...extra,
+		},
+	});
+	function withWorkspace(manifests: CleanupManifest[]) {
+		const f = cleanupFixture();
+		const writes: Array<[string, JsonObject]> = [];
+		f.operations.listHerdr = () => [
+			{
+				path: "/managed/repo/task",
+				branch: "task",
+				isLinkedWorktree: true,
+				workspaceId: "w2",
+			},
+		];
+		f.operations.readManifests = () => manifests;
+		f.operations.writeManifest = (file, value) => {
+			writes.push([file, value]);
+		};
+		return { f, writes };
+	}
+	it("closes the primary workspace after removal and consumes the claim", async () => {
+		const { f, writes } = withWorkspace([
+			manifest({ openedPrimaryWorkspaceId: "w1" }),
+		]);
+		const seen: unknown[] = [];
+		f.operations.closeOpenedPrimaryWorkspace = (source, claimed) => {
+			seen.push([source, [...claimed]]);
+			return { note: "Closed primary workspace w1.", closedWorkspaceId: "w1" };
+		};
+		const result = await removeContainedWorktree(f.input);
+		assert.equal(result.status, "removed");
+		assert.deepEqual(seen, [["/repo", ["w1"]]]);
+		assert.match(result.message, /Closed primary workspace w1\./);
+		assert.equal(writes.length, 2);
+		assert.equal(writes[0][1].openedPrimaryWorkspaceId, undefined);
+		assert.equal("openedPrimaryWorkspaceId" in writes[0][1], true);
+		assert.equal(writes[1][1].state, "removed");
+	});
+	it("honors a claim recorded by an earlier worktree of the same source", async () => {
+		const { f } = withWorkspace([
+			manifest(),
+			{
+				file: "/earlier.json",
+				value: { state: "removed", openedPrimaryWorkspaceId: "w1" },
+			},
+		]);
+		let claims: string[] = [];
+		f.operations.closeOpenedPrimaryWorkspace = (_source, claimed) => {
+			claims = [...claimed];
+			return undefined;
+		};
+		assert.equal((await removeContainedWorktree(f.input)).status, "removed");
+		assert.deepEqual(claims, ["w1"]);
+	});
+	it("never asks Herdr to close a workspace without a recorded claim", async () => {
+		const { f } = withWorkspace([manifest()]);
+		f.operations.closeOpenedPrimaryWorkspace = () => {
+			throw new Error("must not be called");
+		};
+		assert.equal((await removeContainedWorktree(f.input)).status, "removed");
+	});
+	it("reports a failed primary cleanup as a warning after the checkout is removed", async () => {
+		const { f, writes } = withWorkspace([
+			manifest({ openedPrimaryWorkspaceId: "w1" }),
+		]);
+		f.operations.closeOpenedPrimaryWorkspace = () => {
+			throw new Error("herdr unavailable");
+		};
+		const result = await removeContainedWorktree(f.input);
+		assert.equal(result.status, "removed");
+		assert.match(
+			result.message,
+			/Primary workspace cleanup failed: herdr unavailable/,
+		);
+		assert.equal(writes.at(-1)?.[1].state, "removed");
 	});
 });
