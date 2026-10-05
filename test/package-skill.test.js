@@ -148,7 +148,8 @@ describe("bundled orchestration skill", () => {
 		for (const phrase of [
 			"local paths, URLs, tickets",
 			"deleted and base-only",
-			"at least two fresh discovery reviewers",
+			"one fresh discovery reviewer for routine scope",
+			"at least two fresh",
 			"exact authenticated `provider/model-id`",
 			"author families",
 			"tools:",
@@ -199,7 +200,7 @@ describe("bundled orchestration skill", () => {
 		);
 		for (const phrase of [
 			"Routine",
-			"2 fresh reviewers",
+			"1 fresh reviewer",
 			"High",
 			"3 fresh reviewers with distinct lenses",
 			"cross-family verifier",

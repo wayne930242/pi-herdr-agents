@@ -6,8 +6,7 @@ description: Run a bounded review with fresh public subagents and parent synthes
 # Orchestrate a review
 
 Use public `subagent()` fan-out. The parent owns source resolution, evidence,
-launches, and synthesis. Use only ordinary public child launches; do not compile
-scripts, request approval, or invoke private control tools.
+launches, and synthesis.
 
 For an adversarial code, pull-request, or report review, also read
 [the adversarial review procedure](adversarial-review.md).
@@ -33,8 +32,9 @@ drift makes the review `INCOMPLETE`.
 
 ## 2. Select reviewers
 
-Launch at least two fresh discovery reviewers in ordinary panes with public
-`subagent()` calls. Set an exact authenticated `provider/model-id` and supported
+Launch one fresh discovery reviewer for routine scope, and at least two fresh
+discovery reviewers with distinct lenses for high-risk scope, in ordinary panes
+with public `subagent()` calls. Set an exact authenticated `provider/model-id` and supported
 `thinking` value on every child; never inherit or guess either value. Curated
 task shortlists can guide non-review roles, but reviewers must use an exact ID,
 not `task:review`, when author-family exclusion is required. Exclude
@@ -80,9 +80,10 @@ retry or replace a model.
 
 After all discovery results arrive, launch candidate-dependent verification only
 when a report raises a potential P0/P1 or another predeclared high-risk claim.
-A verifier must use a model family different from the report author and receives
-the candidate record plus primary evidence. If no eligible verifier exists, keep
-the candidate unverified and mark the final result `INCOMPLETE`.
+A verifier receives the candidate record plus primary evidence and comes from a
+model family different from the report author when one is authenticated;
+otherwise a fresh same-family verifier runs and the report discloses the reuse.
+A candidate no verifier resolved is reported as unverified, not as `INCOMPLETE`.
 
 Finally, the parent synthesizes every discovery and verification outcome. Do not
 ask a child synthesizer to hide failures or invent agreement. Preserve

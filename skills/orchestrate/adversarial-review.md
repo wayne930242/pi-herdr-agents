@@ -2,7 +2,7 @@
 
 Use this branch for a requested adversarial code, pull-request, or report
 review. It extends the public-child topology in `SKILL.md`; the parent launches,
-collects, and synthesizes. There is no private runner or approval phase.
+collects, and synthesizes.
 
 ## Pin the review
 
@@ -21,19 +21,19 @@ Every discovery, verifier, and parent synthesis instruction includes:
 ## Topology and models
 
 Resolve exact authenticated models and supported thinking levels before launch.
-Apply author-family exclusion first; stop if required origin is unknown. Select
+Apply author-family exclusion first; stop if required origin is unknown. Prefer
 a different family from a report author for any verifier. Prefer an unused family
 for synthesis and disclose permitted reuse.
 
 | Risk | Discovery | Conditional verification | Synthesis |
 | --- | --- | --- | --- |
-| Routine | 2 fresh reviewers | One per serious candidate | Parent |
+| Routine | 1 fresh reviewer | One per serious candidate | Parent |
 | High | 3 fresh reviewers with distinct lenses | One per serious candidate | Parent |
 
 High-risk lenses cover specification/correctness, security/failure behavior,
 and operations/concurrency/test evidence. Launch verifiers only for potential
 P0/P1 or another predeclared material claim. If no cross-family verifier is
-available, retain the candidate as unverified and return `INCOMPLETE`.
+available, a fresh same-family verifier runs and the report discloses the reuse.
 
 Use ordinary-pane public `subagent()` calls, exact `model` and `thinking`,
 `fork: false`, and fresh standalone reviewer contexts. Role frontmatter `tools:` is the only
@@ -66,11 +66,12 @@ resolution, `reproduced`/`trace-backed`/`unverified` evidence status, location,
 provenance, preconditions, reproduction or trace, expected behavior, actual
 behavior, impact, and minimal fix.
 
-A discovery P0/P1 remains an unverified candidate until cross-family evidence
+A discovery P0/P1 remains an unverified candidate until verifier evidence
 confirms or rejects it. A verifier can resolve only supplied IDs, and a
 confirmation or rejection needs reproduced or trace-backed evidence. Malformed
-reports, public subagent operational failures, coverage gaps, any child
-`INCOMPLETE`, and unresolved serious candidates propagate `INCOMPLETE`.
+reports, public subagent operational failures, coverage gaps, and any child
+`INCOMPLETE` propagate `INCOMPLETE`; an unresolved serious candidate is reported
+as unverified.
 
 ## Parent synthesis
 
