@@ -5,6 +5,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -30,8 +31,9 @@ function expectedShellQuote(value: string): string {
 }
 
 function fixture() {
-	const root = mkdtempSync(
-		join(tmpdir(), "subagent-launch-test-[probe](regex)-"),
+	// Git reports canonical paths; on macOS tmpdir() sits behind the /var -> /private/var link.
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "subagent-launch-test-[probe](regex)-")),
 	);
 	const project = join(root, "project");
 	const agentDir = join(root, "agent");

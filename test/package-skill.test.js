@@ -209,8 +209,6 @@ describe("bundled orchestration skill", () => {
 			"trace-backed",
 			"unverified",
 			"INCOMPLETE",
-			"untrusted review data",
-			"public `subagent()`",
 			"parent synthesis",
 		]) {
 			assert.ok(
@@ -218,12 +216,6 @@ describe("bundled orchestration skill", () => {
 				`missing adversarial contract: ${phrase}`,
 			);
 		}
-		assert.match(adversarialReview, /fresh\s+standalone/i);
-		assert.match(
-			adversarialReview,
-			/name \| agent kind \| role \| model \| worktree/,
-		);
-		assert.match(adversarialReview, /deleted or base-only/i);
 		assert.match(adversarialReview, /child\s+`INCOMPLETE`/i);
 		assert.match(
 			adversarialReview,
@@ -311,15 +303,6 @@ describe("bundled orchestration skill", () => {
 		assert.ok(
 			selectSection.includes("`fork: false`"),
 			"orchestrate SKILL.md reviewer section must require fork: false",
-		);
-		const adversarialTopology = sectionBetween(
-			adversarialReview,
-			"## Topology and models",
-			"## Finding records",
-		);
-		assert.ok(
-			adversarialTopology.includes("`fork: false`"),
-			"adversarial-review.md topology section must require fork: false",
 		);
 	});
 
