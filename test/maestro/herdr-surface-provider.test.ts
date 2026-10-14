@@ -636,4 +636,122 @@ describe("HerdrSurfaceProvider", () => {
 			["pane", "close", "pane-a"],
 		]);
 	});
+
+	describe("grouped workspace choice", () => {
+		const choose = __herdrTest__.chooseGroupedWorkspace;
+		const center = { workspaceId: "wF", checkoutPath: "/p/center" };
+		const other = { workspaceId: "wO", checkoutPath: "/p/other" };
+		const unbound = { workspaceId: "wG" };
+
+		it("keeps a same-repo child with an unbound caller workspace", () => {
+			assert.equal(
+				choose("wG", ["/p/center"], "/p/center/apps/x", [
+					center,
+					unbound,
+					other,
+				]),
+				"wG",
+			);
+		});
+
+		it("moves a child to another project's own workspace", () => {
+			assert.equal(
+				choose("wG", ["/p/center"], "/p/other/sub", [center, unbound, other]),
+				"wO",
+			);
+		});
+
+		it("uses the caller workspace when it is the match", () => {
+			assert.equal(
+				choose("wF", ["/elsewhere"], "/p/center/apps/x", [center, other]),
+				"wF",
+			);
+		});
+
+		it("prefers the longest checkout and moves out of an enclosing caller", () => {
+			const nested = { workspaceId: "wN", checkoutPath: "/p/center/apps/x" };
+			assert.equal(
+				choose("wG", ["/p/center"], "/p/center/apps/x/src", [
+					center,
+					nested,
+					unbound,
+				]),
+				"wN",
+			);
+			assert.equal(
+				choose("wG", ["/p/center/apps/x"], "/p/center/apps/x/src", [
+					center,
+					nested,
+					unbound,
+				]),
+				"wG",
+			);
+		});
+
+		it("uses the caller workspace when no checkout matches", () => {
+			assert.equal(
+				choose("wG", ["/p/center"], "/tmp/scratch", [center, unbound]),
+				"wG",
+			);
+		});
+
+		it("moves to the match when the caller reports no directory", () => {
+			assert.equal(
+				choose("wG", [], "/p/center/apps/x", [center, unbound]),
+				"wF",
+			);
+		});
+
+		it("places the child in the caller's Agents tab through Herdr", async () => {
+			const calls: string[][] = [];
+			await __herdrTest__.withMockHerdrExec(
+				(args) => {
+					calls.push(args);
+					if (args[0] === "pane" && args[1] === "current") {
+						return json({
+							pane: {
+								pane_id: "parent",
+								tab_id: "parent-tab",
+								workspace_id: "wG-e2e",
+								cwd: "/p/center-e2e",
+								foreground_cwd: "/p/center-e2e",
+							},
+						});
+					}
+					if (args[0] === "workspace" && args[1] === "list") {
+						return json({
+							type: "workspace_list",
+							workspaces: [
+								{
+									workspace_id: "wF-e2e",
+									worktree: { checkout_path: "/p/center-e2e" },
+								},
+								{ workspace_id: "wG-e2e" },
+							],
+						});
+					}
+					if (args[0] === "pane" && args[1] === "list") return paneList();
+					if (args[0] === "tab" && args[1] === "create") {
+						return json({
+							tab: { tab_id: "agents-e2e" },
+							root_pane: { pane_id: "child" },
+						});
+					}
+					return json({ ok: true });
+				},
+				async () => {
+					const provider = new HerdrSurfaceProvider({ paneConfig });
+					await provider.createSurface({
+						name: "child",
+						cwd: "/p/center-e2e/apps/x",
+						placement: { kind: "grouped" },
+					});
+				},
+			);
+			assert.equal(
+				calls.find((args) => args[0] === "tab" && args[1] === "create")?.[3],
+				"wG-e2e",
+			);
+		});
+	});
 });
