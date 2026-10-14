@@ -116,6 +116,8 @@ interface HerdrCurrentPaneInfo {
 	pane_id: string;
 	tab_id: string;
 	workspace_id: string;
+	/** Directories the caller pane reports; absent when Herdr omits them. */
+	cwds: string[];
 }
 
 async function getHerdrCurrentPaneInfo(
@@ -139,6 +141,7 @@ async function getHerdrCurrentPaneInfo(
 		pane_id: pane.pane_id,
 		tab_id: pane.tab_id,
 		workspace_id: pane.workspace_id,
+		cwds: [pane.cwd, pane.foreground_cwd].filter(isNonEmptyString),
 	};
 }
 
@@ -383,6 +386,40 @@ async function placementPanes(timeout?: number): Promise<
 	return panes;
 }
 
+/**
+ * Pick the workspace for a grouped child. The longest checkout containing the
+ * child's cwd is the project's home. The caller stays put when it is that
+ * workspace or is itself working inside that checkout, so a pane in an
+ * unbound workspace keeps its children beside it; only a different project
+ * moves the child. No matching checkout means the caller's workspace.
+ */
+function chooseGroupedWorkspace(
+	callerWorkspace: string,
+	callerCwds: readonly string[],
+	target: string,
+	workspaces: ReadonlyArray<{ workspaceId: string; checkoutPath?: string }>,
+): string {
+	let match: { workspaceId: string; checkoutPath: string } | undefined;
+	for (const { workspaceId, checkoutPath } of workspaces) {
+		if (!checkoutPath || !containsCwd(checkoutPath, target)) continue;
+		if (
+			!match ||
+			checkoutPath.length > match.checkoutPath.length ||
+			(checkoutPath.length === match.checkoutPath.length &&
+				workspaceId === callerWorkspace)
+		) {
+			match = { workspaceId, checkoutPath };
+		}
+	}
+	if (!match || match.workspaceId === callerWorkspace) return callerWorkspace;
+	const matchedCheckout = match.checkoutPath;
+	return callerCwds.some((callerCwd) =>
+		containsCwd(matchedCheckout, canonicalPath(callerCwd)),
+	)
+		? callerWorkspace
+		: match.workspaceId;
+}
+
 export async function createHerdrGroupedSurface(
 	name: string,
 	cwd: string,
@@ -392,9 +429,8 @@ export async function createHerdrGroupedSurface(
 ): Promise<string> {
 	const deadline = Deadline.after(HERDR_PLACEMENT_TIMEOUT_MS);
 	const acquired = await withPlacement(deadline, control?.signal, async () => {
-		const callerWorkspace = (
-			await getHerdrCurrentPaneInfo(deadline.remainingMs())
-		).workspace_id;
+		const caller = await getHerdrCurrentPaneInfo(deadline.remainingMs());
+		const callerWorkspace = caller.workspace_id;
 		const parsed = parseHerdrJson(
 			await herdrExecAsync(["workspace", "list"], deadline.remainingMs()),
 		);
@@ -406,27 +442,24 @@ export async function createHerdrGroupedSurface(
 			throw new Error("Unexpected herdr workspace list output for placement");
 		}
 		const panes = await placementPanes(deadline.remainingMs());
-		const target = canonicalPath(cwd);
-		let workspaceId = callerWorkspace;
-		let matchLength = -1;
-		for (const workspace of workspaces) {
-			if (!isString(workspace?.workspace_id))
-				throw new Error("Unexpected herdr workspace identity");
-			// Herdr exposes checkout ownership, but no stable non-Git workspace root.
-			// A shell's incidental cwd is not a workspace association.
-			const checkout = workspace.worktree?.checkout_path;
-			if (!isString(checkout)) continue;
-			const canonical = canonicalPath(checkout);
-			if (
-				containsCwd(canonical, target) &&
-				(canonical.length > matchLength ||
-					(canonical.length === matchLength &&
-						workspace.workspace_id === callerWorkspace))
-			) {
-				workspaceId = workspace.workspace_id;
-				matchLength = canonical.length;
-			}
-		}
+		const workspaceId = chooseGroupedWorkspace(
+			callerWorkspace,
+			caller.cwds,
+			canonicalPath(cwd),
+			workspaces.map((workspace) => {
+				if (!isString(workspace?.workspace_id))
+					throw new Error("Unexpected herdr workspace identity");
+				// Herdr exposes checkout ownership, but no stable non-Git workspace
+				// root. A shell's incidental cwd is not a workspace association.
+				const checkout = workspace.worktree?.checkout_path;
+				return {
+					workspaceId: workspace.workspace_id,
+					checkoutPath: isString(checkout)
+						? canonicalPath(checkout)
+						: undefined,
+				};
+			}),
+		);
 
 		// Only inspect/create/record holds the reload-shared placement reservation.
 		let paneId: string | undefined;
@@ -1187,6 +1220,7 @@ async function withMockHerdrExec<T>(
 
 export const __herdrTest__ = {
 	withPlacement,
+	chooseGroupedWorkspace,
 	buildCurrentPaneArgs,
 	buildTabCreateArgs,
 	buildPaneSplitArgs,
