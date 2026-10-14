@@ -400,6 +400,8 @@ or re-run `/subagents-init`.
 ```
 
 If `config.json` is absent, status, role, pane, and persistent-specialist settings fall back to `config.json.example`.
+A `config.json` that omits a section uses that section's default; without
+`status`, the status widget stays enabled.
 Model routing does not read the example: no model overrides apply until a real
 `config.json` exists.
 
@@ -666,9 +668,8 @@ action hides marked children from Herdr's Agents view. The setting defaults to
 }
 ```
 
-Add the key to your existing `config.json`. The extension rejects a
-`config.json` without its `status` section, so copy `config.json.example`
-first if the file does not exist. Run `/reload` after changing the setting.
+Add the key to your `config.json`, creating the file if it does not exist.
+Run `/reload` after changing the setting.
 Children launched before the change stay unmarked.
 
 Setting `sidebar.enabled` to `false` and running `/reload` retires every
