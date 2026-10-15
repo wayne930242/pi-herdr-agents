@@ -101,6 +101,7 @@ export interface FreshPiLaunchRequest {
 		systemPromptMode?: "append" | "replace";
 		sessionMode: SubagentSessionMode;
 		cwd?: string;
+		solutionSpace?: string;
 	};
 }
 
@@ -803,6 +804,10 @@ function buildPiCommand(
 		if (request.agent)
 			env.push(`PI_SUBAGENT_AGENT=${shellQuote(request.agent)}`);
 		env.push(`PI_SUBAGENT_AUTO_EXIT=${request.behavior.autoExit ? "1" : "0"}`);
+		if (request.behavior.solutionSpace)
+			env.push(
+				`PI_SUBAGENT_SOLUTION_SPACE=${shellQuote(request.behavior.solutionSpace)}`,
+			);
 		if (artifacts.acceptFile)
 			env.push(`${ACCEPT_FILE_ENV}=${shellQuote(artifacts.acceptFile)}`);
 		// Names only, always set: the child's own Pi decides which skills exist.
