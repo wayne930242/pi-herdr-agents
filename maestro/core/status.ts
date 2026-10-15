@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { isBoolean, isPlainObject } from "./config/type-guards.ts";
 
 export const SNAPSHOT_STALLED_AFTER_MS = 60_000;
+export const DEFAULT_STATUS_ENABLED = true;
 export const DEFAULT_STATUS_LINE_LIMIT = 4;
 export const MAX_STATUS_NAME_LENGTH = 72;
 export const MAX_STATUS_LINE_LENGTH = 120;
@@ -153,6 +154,12 @@ export function parseStatusConfig(
 	source = "config.json",
 ): StatusConfig {
 	const config = requireObject(rawConfig, source, "root");
+	if (!Object.hasOwn(config, "status")) {
+		return {
+			enabled: DEFAULT_STATUS_ENABLED,
+			lineLimit: DEFAULT_STATUS_LINE_LIMIT,
+		};
+	}
 	const status = requireObject(config.status, source, "status");
 	rejectUnsupportedKeys(status, ["enabled"], source, "status");
 	const enabled = requireBoolean(status.enabled, source, "status.enabled");

@@ -3506,6 +3506,35 @@ describe("status.ts", () => {
 		});
 	});
 
+	it("defaults to enabled when the status section is absent", () => {
+		const config = parseStatusConfig({ panes: { mode: "split" } });
+
+		assert.deepEqual(config, {
+			enabled: true,
+			lineLimit: 4,
+		});
+	});
+
+	it("loads a local config without a status section instead of rejecting it", () => {
+		withTempDir((dir) => {
+			const configPath = join(dir, "config.json");
+			const examplePath = join(dir, "config.json.example");
+			writeFileSync(
+				configPath,
+				JSON.stringify({ panes: { mode: "split" } }, null, 2) + "\n",
+			);
+			writeFileSync(
+				examplePath,
+				JSON.stringify({ status: { enabled: false } }, null, 2) + "\n",
+			);
+
+			assert.deepEqual(loadStatusConfig(configPath, examplePath), {
+				enabled: true,
+				lineLimit: 4,
+			});
+		});
+	});
+
 	it("loads a valid config file", () => {
 		const examplePath = fileURLToPath(
 			new URL("../config.json.example", import.meta.url),
