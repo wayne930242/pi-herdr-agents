@@ -461,7 +461,7 @@ export function buildAuthenticatedModelCatalog(
 		);
 	}
 	lines.push(
-		"Omitting model and thinking inherits the parent runtime as a discouraged fallback.",
+		"Omitting model uses the role's model, then configured models.agents and models.default, then the parent model. Omitting thinking uses the role's level, otherwise the parent level, which an installed extension may replace from solutionSpace.",
 	);
 	return lines.join("\n");
 }

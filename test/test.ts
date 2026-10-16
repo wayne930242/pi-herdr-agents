@@ -10283,7 +10283,7 @@ describe("tool registration", () => {
 		);
 		assert.match(
 			subagent.promptGuidelines.join("\n"),
-			/Omitting model and thinking still inherits the parent runtime, but this is a discouraged fallback/,
+			/Omitting model uses the role's model, then the configured models\.agents entry and models\.default, and only then the parent model/,
 		);
 		assert.match(subagent.promptGuidelines.join("\n"), /login-test2/);
 	});

@@ -199,7 +199,7 @@ function buildSubagentRoutingGuidelines(
 					"Use fast tier for bounded mechanical work and recon, mid tier for ordinary implementation or review, and frontier tier for architecture, security, hard diagnosis, or adversarial review. Use minimal/low thinking for mechanical work, medium for ordinary work, and high+ for hard work.",
 				]),
 		"For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Use an exact authenticated provider/model-id from the live catalog below, never an alias or fuzzy name.",
-		"Omitting model and thinking still inherits the parent runtime, but this is a discouraged fallback for orchestrated children.",
+		"Omitting model uses the role's model, then the configured models.agents entry and models.default, and only then the parent model. Omitting thinking uses the role's thinking, otherwise the parent level, which an installed extension may replace from solutionSpace.",
 		"Before launching a new group of subagents, choose a short task slug and name each new child <task>-<role>[-n], for example login-api or login-test2. Use only plan, research, ui, api, build, test, review, browser, security, perf, or merge as roles; leave existing names unchanged. After the final launch, print name | agent kind | role | model | worktree (if any), then use each name in prompts, handoffs, and results.",
 		catalog ??
 			"Authenticated subagent model catalog becomes available after session start.",
@@ -212,7 +212,7 @@ const ThinkingLevelSchema = Type.Union(
 	THINKING_LEVELS.map((level) => Type.Literal(level)),
 	{
 		description:
-			"Pi thinking level. Pick the model tier first, then set thinking within that model's range: minimal/low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, or hard diagnosis. Omitting still inherits the parent level; do not omit on orchestrated child work.",
+			"Pi thinking level. Pick the model tier first, then set thinking within that model's range: minimal/low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, or hard diagnosis. Omitting uses the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead.",
 	},
 );
 
@@ -237,7 +237,7 @@ const SubagentParams = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Explicitly pick an exact authenticated provider/model-id, an ordered comma-separated fallback list, or task:<category> as the entire value. task: categories are case-insensitive and expand configured authenticated candidates; worktrees use only the first. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting still inherits the parent model; do not omit for orchestrated children. Fallback lists cannot be used with worktrees.",
+				"Explicitly pick an exact authenticated provider/model-id, an ordered comma-separated fallback list, or task:<category> as the entire value. task: categories are case-insensitive and expand configured authenticated candidates; worktrees use only the first. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. Fallback lists cannot be used with worktrees.",
 		}),
 	),
 	thinking: Type.Optional(ThinkingLevelSchema),
