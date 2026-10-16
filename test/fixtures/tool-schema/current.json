@@ -40,11 +40,11 @@
 						"type": "string"
 					},
 					"model": {
-						"description": "Explicitly pick an exact authenticated provider/model-id, an ordered comma-separated fallback list, or task:<category> as the entire value. task: categories are case-insensitive and expand configured authenticated candidates; worktrees use only the first. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting still inherits the parent model; do not omit for orchestrated children. Fallback lists cannot be used with worktrees.",
+						"description": "Explicitly pick an exact authenticated provider/model-id, an ordered comma-separated fallback list, or task:<category> as the entire value. task: categories are case-insensitive and expand configured authenticated candidates; worktrees use only the first. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. Fallback lists cannot be used with worktrees.",
 						"type": "string"
 					},
 					"thinking": {
-						"description": "Pi thinking level. Pick the model tier first, then set thinking within that model's range: minimal/low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, or hard diagnosis. Omitting still inherits the parent level; do not omit on orchestrated child work.",
+						"description": "Pi thinking level. Pick the model tier first, then set thinking within that model's range: minimal/low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, or hard diagnosis. Omitting uses the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead.",
 						"anyOf": [
 							{ "const": "off", "type": "string" },
 							{ "const": "minimal", "type": "string" },
@@ -54,6 +54,10 @@
 							{ "const": "xhigh", "type": "string" },
 							{ "const": "max", "type": "string" }
 						]
+					},
+					"solutionSpace": {
+						"description": "One or two sentences on how open-ended the work is, not the work itself: whether the fix or design is given, or which causes or designs remain open. The child receives it as PI_SUBAGENT_SOLUTION_SPACE, where an installed extension can choose the child's thinking level from it.",
+						"type": "string"
 					},
 					"skills": {
 						"description": "Comma-separated skills (overrides agent default)",
