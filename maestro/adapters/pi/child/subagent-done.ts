@@ -55,6 +55,29 @@ export function shouldAutoExitOnAgentEnd(
 	return true;
 }
 
+/**
+ * Event-bus channel a child asks before it ends a settled run. A listener that
+ * will continue the run itself (for example after a provider quota resets)
+ * sets `hold` synchronously, and the child stays open instead of exiting or
+ * reporting its persistent task done.
+ */
+export const EXIT_HOLD_CHANNEL = "pi-herdr-agents:exit-hold";
+
+export interface ExitHoldProbe {
+	messages: any[] | undefined;
+	hold: boolean;
+}
+
+export function isExitHeld(
+	events: ExtensionAPI["events"] | undefined,
+	messages: any[] | undefined,
+): boolean {
+	if (!events) return false;
+	const probe: ExitHoldProbe = { messages, hold: false };
+	events.emit(EXIT_HOLD_CHANNEL, probe);
+	return probe.hold;
+}
+
 export interface SubagentErrorInfo {
 	errorMessage: string;
 	stopReason: "error";
@@ -281,7 +304,8 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (
 				currentTask &&
-				shouldAutoExitOnAgentEnd(userTookOver, messages, runAborted)
+				shouldAutoExitOnAgentEnd(userTookOver, messages, runAborted) &&
+				!isExitHeld(pi.events, messages)
 			) {
 				appendPersistentTaskEvent(
 					process.env.PI_SUBAGENT_SESSION ?? "",
@@ -305,6 +329,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		if (!shouldAutoExitOnAgentEnd(userTookOver, messages, runAborted)) return;
+		if (isExitHeld(pi.events, messages)) return;
 		completionFinalized = true;
 
 		// Surface a settled stopReason: "error" to the parent via the .exit
