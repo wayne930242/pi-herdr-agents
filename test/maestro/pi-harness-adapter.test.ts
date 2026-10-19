@@ -1258,6 +1258,53 @@ describe("PiHarnessAdapter retained worktree kill", () => {
 				assert.equal(await w.adapter.confirmTerminated(w.h), true);
 				assert.deepEqual(signals, []);
 			}));
+		it("judges an identity captured during the pane check, not the stale absence of one", async () =>
+			usingFixture(async (f) => {
+				const { probe, signals } = fakeProbe(new Map([[20, alive()]]));
+				const w = await worktreeChild(f, {
+					probe,
+					captureError: "Process identity not captured within 15000ms",
+				});
+				const inspect = f.surface.inspectSurface.bind(f.surface);
+				f.surface.removeSurface(w.child.surface);
+				f.surface.inspectSurface = async (id) => {
+					const result = await inspect(id);
+					// The capture lands while Herdr answers that the pane is gone.
+					w.child.processIdentity = identity();
+					return result;
+				};
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+				assert.deepEqual(signals, []);
+			}));
+		it("its pane check never holds the process open", async () =>
+			usingFixture(async (f) => {
+				const w = await worktreeChild(f, {
+					captureError: "not recorded",
+					killTimeoutMs: 40,
+				});
+				f.surface.inspectSurface = () => new Promise(() => {});
+				const timers: Array<ReturnType<typeof setTimeout>> = [];
+				const realSetTimeout = globalThis.setTimeout;
+				// SAFETY: the wrapper forwards every argument and returns the real timer.
+				globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+					const timer = realSetTimeout(...args);
+					timers.push(timer);
+					return timer;
+				}) as typeof setTimeout;
+				let result: Promise<boolean>;
+				try {
+					// The pane inspection and its deadline timer start synchronously.
+					result = w.adapter.confirmTerminated(w.h);
+				} finally {
+					globalThis.setTimeout = realSetTimeout;
+				}
+				assert.ok(timers.length > 0, "a deadline timer was armed");
+				assert.ok(
+					timers.every((timer) => !timer.hasRef()),
+					"every timer of the background check is unref'd",
+				);
+				assert.equal(await result, false);
+			}));
 		it("an unavailable pane inspection is never gone", async () =>
 			usingFixture(async (f) => {
 				const w = await worktreeChild(f, { captureError: "not recorded" });

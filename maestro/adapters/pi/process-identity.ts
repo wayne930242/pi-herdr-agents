@@ -100,7 +100,7 @@ export function createLinuxProcessProbe(
 	return {
 		host() {
 			if (process.platform !== "linux")
-				throw new Error(
+				throw new UnsupportedProcessPlatformError(
 					`process identity is unsupported on ${process.platform}; only Linux /proc is read`,
 				);
 			// /proc must describe this process's own PID namespace before any PID read
@@ -132,6 +132,14 @@ export function createLinuxProcessProbe(
 }
 
 export const linuxProcessProbe = createLinuxProcessProbe();
+
+/** The host has no process probe at all; retrying cannot make one appear. */
+export class UnsupportedProcessPlatformError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "UnsupportedProcessPlatformError";
+	}
+}
 
 export interface ProcessRunResult {
 	status: number | null;
@@ -234,7 +242,7 @@ export function createDarwinProcessProbe(
 	return {
 		host() {
 			if (platform !== "darwin")
-				throw new Error(
+				throw new UnsupportedProcessPlatformError(
 					`process identity is unsupported on ${platform}; only macOS ps is read here`,
 				);
 			if (bootId === undefined) {
@@ -278,7 +286,7 @@ export function createHostProcessProbe(
 ): ProcessIdentityProbe {
 	return platform === "darwin"
 		? createDarwinProcessProbe({ platform })
-		: createLinuxProcessProbe();
+		: linuxProcessProbe;
 }
 
 export const hostProcessProbe = createHostProcessProbe();

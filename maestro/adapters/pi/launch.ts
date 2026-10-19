@@ -24,6 +24,7 @@ import type {
 import {
 	getSubagentProcessIdentityFile,
 	hostProcessProbe,
+	UnsupportedProcessPlatformError,
 	readLinuxProcessEnvironment,
 	readProcessIdentityRecord,
 	verifyProcessIdentityRecord,
@@ -294,15 +295,18 @@ export async function captureSurfacePiProcessIdentity(
 	const timeoutMs = options.timeoutMs ?? 15_000;
 	const intervalMs = options.intervalMs ?? 100;
 	const probe = options.probe ?? hostProcessProbe;
-	// A host that cannot name processes can never verify a record, and its child
-	// cannot have recorded one: report that now instead of waiting out a deadline.
+	let lastError = "the child has not recorded its process identity";
+	// A host with no probe can never verify a record, and its child cannot have
+	// recorded one: report that now instead of waiting out a deadline. Any other
+	// host failure may be transient, so it is retried within the window.
 	try {
 		probe.host();
 	} catch (error) {
-		throw new Error(`Process identity not captured: ${errorMessage(error)}`);
+		if (error instanceof UnsupportedProcessPlatformError)
+			throw new Error(`Process identity not captured: ${errorMessage(error)}`);
+		lastError = errorMessage(error);
 	}
 	const deadline = Date.now() + timeoutMs;
-	let lastError = "the child has not recorded its process identity";
 	let answered = false;
 	for (;;) {
 		try {

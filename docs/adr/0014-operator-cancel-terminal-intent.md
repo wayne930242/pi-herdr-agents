@@ -80,7 +80,9 @@ kernel producer, adapter, and finalization. It is not a second engine.
      name `darwin:host` because macOS has one PID space. `lstart` resolves one
      second, so a recycled PID is mistaken for the original only when reused
      within that second. A host with neither probe fails capture at once and
-     says so, instead of waiting out the deadline.
+     says so, instead of waiting out the deadline; any other failure reading
+     the host facts (for example a failed `sysctl`) may be transient, so it
+     is retried within the capture window and reported as the last error.
    - *Signal.* SIGTERM goes only to that identity, re-read (PID and start
      time) immediately before `kill(2)`; a mismatch or read error is never
      signalled. Node exposes no pidfd signal, so the kernel could still reuse

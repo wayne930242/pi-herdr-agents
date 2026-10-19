@@ -405,20 +405,25 @@ export class PiHarnessAdapter implements HarnessAdapter {
 			return false;
 		}
 		const probe = this.options.processProbe ?? hostProcessProbe;
-		const identity = child.worktree ? child.processIdentity : undefined;
-		if (identity) {
-			const state = judgeProcessIdentity(identity, probe);
+		const identityBefore = child.worktree ? child.processIdentity : undefined;
+		if (identityBefore) {
+			const state = judgeProcessIdentity(identityBefore, probe);
 			if (state.kind !== "unknown") return state.kind === "exited";
 		}
 		const deadline = Date.now() + (this.options.killTimeoutMs ?? 5_000);
-		if (!(await this.paneIsMissing(child, deadline))) return false;
-		// The inspection awaited: confirm only while still not known alive.
+		// Background observation never holds the process open.
+		if (!(await this.paneIsMissing(child, deadline, { unref: true })))
+			return false;
+		// The inspection awaited: an identity captured meanwhile is judged too, and
+		// confirms only while not known alive.
+		const identity = child.worktree ? child.processIdentity : undefined;
 		return !identity || judgeProcessIdentity(identity, probe).kind !== "alive";
 	}
 	/** Herdr reports the pane absent; a failure or late answer is never "gone". */
 	private async paneIsMissing(
 		child: PiRunningChild,
 		deadline: number,
+		options: { unref?: boolean } = {},
 	): Promise<boolean> {
 		return (
 			(
@@ -428,6 +433,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 						.then(() => this.options.surface.inspectSurface(child.surface))
 						.catch(() => undefined),
 					deadline,
+					options,
 				)
 			)?.kind === "missing"
 		);

@@ -870,6 +870,53 @@ describe("process identity", () => {
 	});
 
 	it(
+		"retries a transient host failure within the capture window",
+		{ timeout: ANCHORED_TEST_TIMEOUT_MS },
+		withDir((dir, t) =>
+			whileParentLoopAlive(t, async () => {
+				const file = join(dir, "s.jsonl.process.json");
+				writeProcessIdentityRecord(file, record());
+				const { probe } = fakeProbe([
+					[20, stat()],
+					[10, stat("1", "S", 1)],
+				]);
+				let failures = 2;
+				const flaky: ProcessIdentityProbe = {
+					...probe,
+					host() {
+						if (failures-- > 0) throw new Error("sysctl exited 1: busy");
+						return probe.host();
+					},
+				};
+				const captured = await captureSurfacePiProcessIdentity(
+					paneOf(10),
+					"pane",
+					{ file, id: "run", sessionFile: "/s.jsonl" },
+					{ timeoutMs: 5_000, intervalMs: 10, probe: flaky },
+				);
+				assert.deepEqual(captured, identity);
+				assert.equal(failures, -1, "the host was read again after failing");
+				// A host that never recovers reports its last reason at the deadline.
+				const broken: ProcessIdentityProbe = {
+					...probe,
+					host() {
+						throw new Error("sysctl exited 1: busy");
+					},
+				};
+				await assert.rejects(
+					captureSurfacePiProcessIdentity(
+						paneOf(10),
+						"pane",
+						{ file, id: "run", sessionFile: "/s.jsonl" },
+						{ timeoutMs: 60, intervalMs: 10, probe: broken },
+					),
+					/not captured within 60ms: .*sysctl exited 1: busy/,
+				);
+			}),
+		),
+	);
+
+	it(
 		"fails at once, naming the reason, on a host that cannot name processes",
 		withDir(async (dir) => {
 			const file = join(dir, "s.jsonl.process.json");
