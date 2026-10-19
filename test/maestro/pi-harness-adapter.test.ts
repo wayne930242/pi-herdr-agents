@@ -1213,6 +1213,73 @@ describe("PiHarnessAdapter retained worktree kill", () => {
 			);
 			assert.deepEqual(signals, []);
 		}));
+
+	describe("confirmTerminated", () => {
+		it("an exited identity is gone, observed without any signal or pane action", async () =>
+			usingFixture(async (f) => {
+				const { probe, signals } = fakeProbe(new Map<number, Entry>());
+				const w = await worktreeChild(f, { probe, identity: identity() });
+				assert.equal(await w.adapter.confirmTerminated(w.h), true);
+				assert.deepEqual(signals, []);
+				assert.deepEqual(w.closes, []);
+			}));
+		it("an identity known alive is not gone, even when its pane is", async () =>
+			usingFixture(async (f) => {
+				const { probe, signals } = fakeProbe(new Map([[20, alive()]]));
+				const w = await worktreeChild(f, { probe, identity: identity() });
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+				f.surface.removeSurface(w.child.surface);
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+				assert.deepEqual(signals, [], "observation never signals");
+			}));
+		const unprovenIdentities: Array<[string, Entry]> = [
+			["an unreadable identity", "EACCES"],
+			["a reused PID", alive("7777")],
+		];
+		for (const [label, entry] of unprovenIdentities)
+			it(`${label} is gone only with its pane`, async () =>
+				usingFixture(async (f) => {
+					const { probe, signals } = fakeProbe(new Map([[20, entry]]));
+					const w = await worktreeChild(f, { probe, identity: identity() });
+					assert.equal(await w.adapter.confirmTerminated(w.h), false);
+					f.surface.removeSurface(w.child.surface);
+					assert.equal(await w.adapter.confirmTerminated(w.h), true);
+					assert.deepEqual(signals, []);
+				}));
+		it("without a captured identity only a gone pane proves it", async () =>
+			usingFixture(async (f) => {
+				const { probe, signals } = fakeProbe(new Map([[20, alive()]]));
+				const w = await worktreeChild(f, {
+					probe,
+					captureError: "Process identity not captured within 15000ms",
+				});
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+				f.surface.removeSurface(w.child.surface);
+				assert.equal(await w.adapter.confirmTerminated(w.h), true);
+				assert.deepEqual(signals, []);
+			}));
+		it("an unavailable pane inspection is never gone", async () =>
+			usingFixture(async (f) => {
+				const w = await worktreeChild(f, { captureError: "not recorded" });
+				f.surface.inspectSurface = () => {
+					throw new Error("herdr unavailable");
+				};
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+			}));
+		it("an ordinary child is gone exactly when its pane is; an unknown child is not", async () =>
+			usingFixture(async (f) => {
+				const w = await worktreeChild(f);
+				w.child.worktree = undefined;
+				assert.equal(await w.adapter.confirmTerminated(w.h), false);
+				f.surface.removeSurface(w.child.surface);
+				assert.equal(await w.adapter.confirmTerminated(w.h), true);
+				assert.equal(
+					await w.adapter.confirmTerminated({ ...w.h, id: "unknown" }),
+					false,
+				);
+				assert.deepEqual(w.closes, []);
+			}));
+	});
 });
 
 // Linux reads /proc and macOS reads ps; any other host captures no identity.

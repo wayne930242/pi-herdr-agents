@@ -109,6 +109,11 @@ export interface RunSessionOptions {
 	hooks?: RunSessionHooks;
 	operations?: RunSessionOperations;
 	retainSurface?: (result: RunResult, task: Task) => boolean;
+	/**
+	 * How often an unconfirmed cancel re-observes whether its target is gone
+	 * (see `HarnessAdapter.confirmTerminated`). Default: 2000ms.
+	 */
+	terminationRecheckMs?: number;
 }
 /**
  * Operator cancel report. `requested` means the intent is recorded but an
@@ -155,6 +160,8 @@ interface CancelState extends RunCancellation {
 	kill?: Promise<void>;
 	/** Producer wake-ups after a kill settles or the run is suppressed. */
 	waiters: Set<() => void>;
+	/** The owner whose unconfirmed termination is being re-observed. */
+	watching?: OwnedRunAttempt;
 }
 // pi-herdr-agents extension
 interface RunEntry {
@@ -185,6 +192,7 @@ export function createRunSession(options: RunSessionOptions): RunSession {
 	const consumed = new Set<string>();
 	const sessionBase = options.sessionIdPrefix ?? Date.now().toString(36);
 	const retainSurface = options.retainSurface ?? defaultRetainSurface;
+	const recheckMs = options.terminationRecheckMs ?? 2_000;
 
 	function reserve(task: Task): RunEntry {
 		if (entries.has(task.id) || consumed.has(task.id)) {
@@ -381,10 +389,7 @@ export function createRunSession(options: RunSessionOptions): RunSession {
 		const kill = (async () => {
 			try {
 				await owner.adapter.kill(owner.handle);
-				state.termination = "confirmed";
-				state.confirmedAt = Date.now();
-				state.error = undefined;
-				entry.controller.abort();
+				markTerminated(entry, state);
 			} catch (error) {
 				state.termination = "unconfirmed";
 				state.error = errorText(error);
@@ -392,10 +397,76 @@ export function createRunSession(options: RunSessionOptions): RunSession {
 				state.kill = undefined;
 				notifyCancel(entry, state.termination, owner);
 				wake(state);
+				if (state.termination === "unconfirmed")
+					watchTermination(entry, state, owner);
 			}
 		})();
 		state.kill = kill;
 		return kill;
+	}
+
+	function markTerminated(entry: RunEntry, state: CancelState) {
+		state.termination = "confirmed";
+		state.confirmedAt = Date.now();
+		state.error = undefined;
+		entry.controller.abort();
+	}
+
+	// An unconfirmed kill is not the end of the evidence: the pane can close or
+	// the process exit afterwards while nobody retries (a retained pane outlives
+	// its Pi, and the producer makes only one kill of its own). The adapter is
+	// asked, without any signal, whether the target is now gone; the same
+	// confirmation then settles the run through its single producer.
+	function watchTermination(
+		entry: RunEntry,
+		state: CancelState,
+		owner: OwnedRunAttempt,
+	) {
+		const observe = owner.adapter.confirmTerminated?.bind(owner.adapter);
+		if (!observe || state.watching === owner) return;
+		state.watching = owner;
+		const live = () =>
+			state.watching === owner &&
+			state.termination !== "confirmed" &&
+			!entry.suppressed &&
+			entry.active === owner &&
+			entries.get(entry.task.id) === entry;
+		void (async () => {
+			try {
+				while (live()) {
+					await pause(state, recheckMs);
+					// An owned kill in flight reaches its own verdict.
+					if (!live() || state.kill) continue;
+					let gone = false;
+					try {
+						gone = await observe(owner.handle);
+					} catch {
+						/* An unreadable target is unknown, never gone. */
+					}
+					if (!gone || !live() || state.kill) continue;
+					markTerminated(entry, state);
+					notifyCancel(entry, "confirmed", owner);
+					wake(state);
+				}
+			} finally {
+				if (state.watching === owner) state.watching = undefined;
+			}
+		})();
+	}
+
+	// Resolves after the delay or at the next wake, whichever comes first. A
+	// background observation never holds the process open.
+	function pause(state: CancelState, ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				state.waiters.delete(done);
+				resolve();
+			};
+			const timer = setTimeout(done, ms);
+			timer.unref();
+			state.waiters.add(done);
+		});
 	}
 
 	function wake(state: CancelState) {

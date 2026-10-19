@@ -390,6 +390,49 @@ export class PiHarnessAdapter implements HarnessAdapter {
 		}
 	}
 	/**
+	 * Observation only, never a signal: the evidence kill() accepts, read again
+	 * later. An unconfirmed cancel polls it, so a pane closed or a Pi that
+	 * exited after the kill deadline still settles the run. A retained worktree
+	 * child is gone when its captured identity has exited, or when its pane is
+	 * gone while that identity is not known alive; any other child, when its
+	 * pane is gone. Without an identity a live pane proves nothing.
+	 */
+	async confirmTerminated(handle: AgentHandle): Promise<boolean> {
+		let child: PiRunningChild;
+		try {
+			child = this.getRunningChild(handle);
+		} catch {
+			return false;
+		}
+		const probe = this.options.processProbe ?? hostProcessProbe;
+		const identity = child.worktree ? child.processIdentity : undefined;
+		if (identity) {
+			const state = judgeProcessIdentity(identity, probe);
+			if (state.kind !== "unknown") return state.kind === "exited";
+		}
+		const deadline = Date.now() + (this.options.killTimeoutMs ?? 5_000);
+		if (!(await this.paneIsMissing(child, deadline))) return false;
+		// The inspection awaited: confirm only while still not known alive.
+		return !identity || judgeProcessIdentity(identity, probe).kind !== "alive";
+	}
+	/** Herdr reports the pane absent; a failure or late answer is never "gone". */
+	private async paneIsMissing(
+		child: PiRunningChild,
+		deadline: number,
+	): Promise<boolean> {
+		return (
+			(
+				await settleBefore(
+					// Providers may throw synchronously or reject; both mean "unknown".
+					Promise.resolve()
+						.then(() => this.options.surface.inspectSurface(child.surface))
+						.catch(() => undefined),
+					deadline,
+				)
+			)?.kind === "missing"
+		);
+	}
+	/**
 	 * Exit evidence is only the launch-verified identity (PID + start time, on
 	 * this boot and PID namespace) no longer existing, or a gone pane while that
 	 * identity is not known alive. SIGTERM goes only to that identity,
@@ -404,16 +447,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 		const probe = this.options.processProbe ?? hostProcessProbe;
 		const timeoutMs = this.options.killTimeoutMs ?? 5_000;
 		const deadline = Date.now() + timeoutMs;
-		const paneGone = async () =>
-			(
-				await settleBefore(
-					// Providers may throw synchronously or reject; both mean "unknown".
-					Promise.resolve()
-						.then(() => this.options.surface.inspectSurface(child.surface))
-						.catch(() => undefined),
-					deadline,
-				)
-			)?.kind === "missing";
+		const paneGone = () => this.paneIsMissing(child, deadline);
 		let identity = child.processIdentity;
 		if (!identity) {
 			// An expired capture gets one fresh attempt within this cancel's budget.

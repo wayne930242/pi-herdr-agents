@@ -1799,7 +1799,7 @@ const SUBAGENT_CANCEL_DESCRIPTION =
 	"records terminal intent first, terminates its owned process, and delivers exactly one cancelled result. " +
 	"No model fallback, retry, or recovery starts after a cancel. " +
 	"An ordinary pane is closed; a managed-worktree child stops only its Pi process and keeps the workspace, checkout, commits, and manifest. " +
-	"Returns confirmed, requested (launch still in flight), unconfirmed (the run stays live; call again to retry), or already-terminal. " +
+	"Returns confirmed, requested (launch still in flight), unconfirmed (the run stays live and settles by itself if its pane or process is later seen gone; call again to retry), or already-terminal. " +
 	"Persistent specialists are rejected; use subagent_stop. Do not poll: the cancelled result arrives automatically.";
 
 interface SubagentCancelDetails {
@@ -1825,7 +1825,7 @@ function cancelStatusText(
 		case "requested":
 			return `Cancel recorded for subagent "${name}"; its in-flight launch is terminated as soon as it is acquired. ${noRetry} One cancelled result will be delivered after termination is confirmed.`;
 		case "unconfirmed":
-			return `Cancel recorded for subagent "${name}", but termination is unconfirmed: ${report.error ?? "unknown error"}. The run stays live and owned. ${noRetry} Call subagent_cancel again to retry termination.`;
+			return `Cancel recorded for subagent "${name}", but termination is unconfirmed: ${report.error ?? "unknown error"}. The run stays live and owned, and settles as cancelled by itself if its pane or process is later seen gone. ${noRetry} Call subagent_cancel again to retry termination.`;
 		case "already-terminal":
 			return `Subagent "${name}" already reached a terminal result; nothing was cancelled.`;
 	}

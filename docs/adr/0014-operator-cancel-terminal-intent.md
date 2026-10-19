@@ -1,7 +1,7 @@
 # ADR-0014: Operator cancel records terminal intent before termination
 
 - **Status:** Accepted
-- **Date:** 2026-10-05; amended 2026-10-19 (macOS identity)
+- **Date:** 2026-10-05; amended 2026-10-19 (macOS identity, unconfirmed re-observation)
 - **Scope:** Public `subagent_cancel` for ordinary managed Pi subagents
 
 ## Context
@@ -107,6 +107,21 @@ kernel producer, adapter, and finalization. It is not a second engine.
    The manifest records `cancelled` only for
    confirmed termination, and the handoff is captured as for any completion.
    There is no Git cleanup.
+   - *Re-observation (amendment).* An unconfirmed kill is not the end of the
+     evidence. A retained pane outlives its Pi, so the child can exit, or its
+     pane be closed by another tool, after the kill deadline while no operator
+     retries (the producer makes only one kill of its own). After every
+     unconfirmed kill the kernel therefore asks the owning adapter
+     `confirmTerminated`, every 2 seconds, with no signal and no pane action.
+     The Pi adapter answers true when the captured identity no longer exists,
+     or when the pane is gone while the identity is not known alive (or was
+     never captured); the same rules as the kill's confirmation, so a live,
+     unreadable, or reused identity under an open pane stays unconfirmed.
+     A true answer confirms termination through the same single path: the
+     producer's wait is aborted, the cancelled result is finalized and
+     delivered once. The observation pauses while an owned kill is in flight,
+     stops on shutdown suppression, and an error or late answer is never
+     "gone".
 8. **Persistent specialists are rejected** before any kill; `subagent_stop`
    keeps its graceful v1 semantics.
 
@@ -122,8 +137,9 @@ kernel producer, adapter, and finalization. It is not a second engine.
 - Worktree cancel signals only on Linux and macOS (amendment; it was Linux
   only): elsewhere no identity is captured, nothing is signalled, and only a
   gone pane confirms.
-- An unconfirmed cancel can leave a live row indefinitely until a retry, the
-  child's exit, manual pane closure, or parent shutdown.
+- An unconfirmed cancel stays a live row while its pane is open and its Pi is
+  not proven gone, until a retry, parent shutdown, or (amendment) the
+  re-observation seeing the pane or process gone, which settles it by itself.
 - Late callbacks after delivery change nothing: the retired ID answers
   `already-terminal`.
 

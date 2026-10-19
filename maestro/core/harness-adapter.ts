@@ -87,6 +87,14 @@ export interface HarnessAdapter {
 	/** Terminate the agent process. Irreversible. */
 	kill(handle: AgentHandle): Promise<void>;
 
+	// pi-herdr-agents extension
+	/**
+	 * Whether a kill's target is already gone, by the same evidence `kill`
+	 * accepts. Observation only: it never signals, closes, or otherwise acts.
+	 * Optional: without it, an unconfirmed kill is retried only by the operator.
+	 */
+	confirmTerminated?(handle: AgentHandle): Promise<boolean>;
+
 	/** Feed follow-up text to a running agent. */
 	sendInput(handle: AgentHandle, text: string): Promise<void>;
 

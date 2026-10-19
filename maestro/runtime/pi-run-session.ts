@@ -333,6 +333,8 @@ export interface PiRunSessionInfrastructure {
 	supervision: SupervisionCoordinator;
 	/** Kernel process-identity probe for worktree cancel; tests inject it. */
 	processProbe?: ProcessIdentityProbe;
+	/** Re-observation period of an unconfirmed cancel; tests shorten it. */
+	terminationRecheckMs?: number;
 	/** Sidebar marker transport; defaults to this pane's Herdr socket. */
 	markerWriter?: MarkerWriter;
 }
@@ -539,6 +541,7 @@ export function createDefaultRunSession(
 			},
 			roles,
 			cwd: process.cwd(),
+			terminationRecheckMs: options.infrastructure?.terminationRecheckMs,
 			operations: {
 				async prepare(task, role) {
 					const snapshot = state.options.getLaunchSnapshot();

@@ -592,6 +592,8 @@ async function withAdapterHost(run: (f: any) => Promise<void>) {
 			surfaceProvider: surface,
 			launchOperations,
 			supervision,
+			// An unconfirmed cancel re-observes its target; keep that quick here.
+			terminationRecheckMs: 20,
 		};
 		function patch(target: any, name: string, value: any) {
 			const original = target[name];
@@ -2149,6 +2151,20 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 		return { retained, git };
 	}
 
+	// The producer consumes the exit sidecar at once but only finalizes after the
+	// cancel is confirmed, so the lifecycle `f.finish` waits on stays open. A
+	// directory watch that has only just started can miss a single write
+	// (observed with macOS FSEvents), so rewrite it until it is consumed.
+	async function exitNaturally(f: any, child: any) {
+		const exit = `${child.sessionFile}.exit`;
+		const deadline = Date.now() + 5_000;
+		do {
+			assert.ok(Date.now() < deadline, "the child's exit was never consumed");
+			writeFileSync(exit, JSON.stringify({ type: "done" }));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		} while (existsSync(exit));
+	}
+
 	// A fake kernel for worktree cancel: launch capture yields pid 4242's
 	// identity; SIGTERM removes it from the table.
 	function identityKernel(f: any) {
@@ -2493,6 +2509,95 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 			assert.equal(results(f).length, 0);
 			assert.deepEqual(f.closed, []);
 			assert.ok(existsSync(retained));
+		}));
+
+	it("an unconfirmed worktree cancel settles as one cancelled result once the retained pane is gone", async () =>
+		withAdapterHost(async (f) => {
+			const { retained } = await worktreeHost(f);
+			const kernel = identityKernel(f);
+			// The identity was never captured (the observed incident): no signal can
+			// be sent, so only the pane's absence can ever settle the cancel.
+			f.patch(f.launchOperations, "captureProcessIdentity", async () => {
+				throw new Error("Process identity not captured within 15000ms");
+			});
+			const child = await f.launch({
+				name: "gone-pane",
+				task: "bounded",
+				worktree: { branch: "cancel-worktree" },
+			});
+			const manifest = () =>
+				JSON.parse(readFileSync(child.worktree.manifestFile, "utf8")).state;
+			const first = await cancel(f, { id: child.id });
+			assert.equal(first.details.status, "unconfirmed");
+			assert.match(first.details.error, /nothing was signalled/);
+			// The child's Pi exits on its own; the retained shell pane stays open.
+			await exitNaturally(f, child);
+			for (let i = 0; i < 10; i++) await f.turn();
+			assert.equal(child.cancelState, "unconfirmed");
+			assert.equal(results(f).length, 0);
+			assert.equal(f.runtime.runningSubagents.has(child.id), true);
+			assert.match(
+				subagentsModule.__test__
+					.renderSubagentWidgetLines([child], 100)
+					.join("\n"),
+				/cancel unconfirmed/,
+			);
+			// Another tool later closes the workspace: nobody retries the cancel.
+			f.surface.removeSurface(child.surface);
+			await until(f, () => results(f).length === 1, "the cancelled result");
+			for (let i = 0; i < 20; i++) await f.turn();
+			assert.equal(results(f).length, 1, "exactly one result");
+			assert.equal(results(f)[0].message.details.error, "cancelled");
+			assert.equal(manifest(), "cancelled");
+			assert.equal(f.runtime.runningSubagents.has(child.id), false);
+			assert.doesNotMatch(
+				subagentsModule.__test__
+					.renderSubagentWidgetLines(
+						[...f.runtime.runningSubagents.values()],
+						100,
+					)
+					.join("\n"),
+				/gone-pane/,
+			);
+			assert.deepEqual(kernel.signals, [], "nothing was ever signalled");
+			assert.deepEqual(f.closed, [], "the extension closed no surface");
+			assert.ok(existsSync(retained));
+		}));
+
+	it("an unconfirmed worktree cancel settles once its unreadable identity exits, pane untouched", async () =>
+		withAdapterHost(async (f) => {
+			await worktreeHost(f);
+			const kernel = identityKernel(f);
+			kernel.table.set(4242, "EACCES");
+			const child = await f.launch({
+				name: "exited-identity",
+				task: "bounded",
+				worktree: { branch: "cancel-worktree" },
+			});
+			const first = await cancel(f, { id: child.id });
+			assert.equal(first.details.status, "unconfirmed");
+			assert.match(first.details.error, /process 4242 is unreadable/);
+			for (let i = 0; i < 10; i++) await f.turn();
+			assert.equal(results(f).length, 0);
+			// The process is readable again, and gone: Pi exited after the deadline.
+			kernel.table.delete(4242);
+			await until(f, () => results(f).length === 1, "the cancelled result");
+			for (let i = 0; i < 20; i++) await f.turn();
+			assert.equal(results(f).length, 1, "exactly one result");
+			assert.equal(results(f)[0].message.details.error, "cancelled");
+			assert.equal(
+				JSON.parse(readFileSync(child.worktree.manifestFile, "utf8")).state,
+				"cancelled",
+			);
+			assert.equal(f.runtime.runningSubagents.has(child.id), false);
+			assert.deepEqual(
+				kernel.signals,
+				[],
+				"an unproven identity is never signalled",
+			);
+			assert.ok(
+				f.surface.listSurfaces().some((s: any) => s.id === child.surface),
+			);
 		}));
 
 	it("a fallback owner transferred after the cancel shows its own unconfirmed kill and stays live", async () =>

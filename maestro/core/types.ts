@@ -249,7 +249,10 @@ export interface RunResult {
 export interface RunCancellation {
 	/** When the terminal intent was recorded, before any abort or kill. */
 	requestedAt: number;
-	/** "confirmed" only after the owning adapter's kill resolved. */
+	/**
+	 * "confirmed" only after the owning adapter's kill resolved, or its
+	 * `confirmTerminated` observation found the target already gone.
+	 */
 	termination: "confirmed" | "unconfirmed";
 	confirmedAt?: number;
 	/** Last kill failure while termination remains unconfirmed. */

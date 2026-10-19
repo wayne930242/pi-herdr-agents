@@ -122,7 +122,7 @@ afterwards. Do not poll; the result arrives on its own.
 | --- | --- |
 | `confirmed` | Termination confirmed. One cancelled result is delivered. |
 | `requested` | Launch in flight; terminated once acquired, no later model tried. Wait. |
-| `unconfirmed` | Termination failed. The run stays live and supervised; nothing is delivered. Retry, or report. |
+| `unconfirmed` | Termination failed. The run stays live and supervised; nothing is delivered yet. It settles as cancelled by itself if its pane or process is later seen gone. Retry, or report. |
 | `already-terminal` | Already had a natural result or was retired; nothing cancelled. |
 
 Repeated cancels join an in-flight one and keep the first request time; there
