@@ -339,7 +339,7 @@ suppressed, or when the process exits or can no longer be verified. A
 Marker writes never fail a launch or keep Pi running. Each write has a 2-second
 timeout on an unreferenced socket, failed writes are not retried, and three
 failures in a row stop that child's marker. Process identity reads Linux
-`/proc`, so on other systems, and outside Herdr, nothing is marked. After a
+`/proc` or macOS `ps`, so on other systems, and outside Herdr, nothing is marked. After a
 parent crash, a marker can remain for up to 15 seconds after the last write
 Herdr applied. A marker belongs to the pane, so a different process started by
 hand in a delegated pane stays hidden by Focus while the original process is

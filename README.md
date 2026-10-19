@@ -251,7 +251,7 @@ A `read, bash` allowlist is not a read-only boundary, because shell commands can
 The optional [Pi Herdr Agents Sidebar](plugins/sidebar/README.md) Herdr plugin adds two actions. Focus hides delegated Pi children from Herdr's Agents view. All removes this plugin's filter. It needs:
 
 - `pi-herdr-agents` version `3.2.0` or later, with `sidebar.enabled` turned on
-- Linux, because the extension identifies child processes through `/proc`
+- Linux, because the plugin manifest declares only `linux` (the extension identifies child processes through `/proc` or, on macOS, `ps`)
 - Herdr `0.9.0` or later, the first release with the agent view API. Tested on `0.9.1` and `0.9.2-preview.2026-09-29-8e78f929d8f0`; other builds are untested.
 - `node` on the `PATH` of the Herdr server
 

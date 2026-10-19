@@ -27,6 +27,15 @@ Subagent tabs, panes, and worktree workspaces are created without stealing keybo
 
 The widget shows `stalled` when pane inspection fails or the pane disappears without a completion record. Time alone never makes a run stalled. A no-progress advisory warns once per episode and never interrupts, kills, retries, or restarts a child. Interrupt the child with `subagent_interrupt`, end an ordinary run with `subagent_cancel`, or stop a persistent specialist with `subagent_stop`. See [In-progress status updates](tools.md#in-progress-status-updates) and [Supervision transport](configuration.md#supervision-transport).
 
+## A cancel stays "cancel unconfirmed"
+
+`subagent_cancel` on a worktree child reports `unconfirmed` when it cannot prove the child's Pi process is gone, and the run stays live. The error says why:
+
+- `Owned Pi process identity was not captured ... nothing was signalled: <reason>`: the child never published a verifiable process identity. The reason is the earlier capture failure, for example `process identity is unsupported on <platform>` (a host other than Linux or macOS), `the child has not recorded its process identity` (Pi had not loaded the child extension within 15 seconds), or `is not the Herdr pane shell ... or its descendant`. Nothing is signalled without a proven identity. Retrying captures again within the cancel's own deadline and picks up a record written late.
+- `Owned Pi process exit unconfirmed ... still alive`: the identity was signalled with SIGTERM but did not exit, for example a suspended Pi. Resume or kill that process yourself, then retry.
+
+A retained worktree shell that is still open with an unproven Pi keeps the cancel unconfirmed; end the Pi yourself or close the workspace. See [Cancelling a running subagent](tools.md#cancelling-a-running-subagent) and [worktree failure behavior](worktree-subagents.md#failure-help-and-restart-behavior).
+
 ## A model fails
 
 A catalog-listed model and configured authentication do not prove that your provider account can use the model. The completion keeps each raw provider reason with its model. Check account access, launch a new subagent with a supported model, or configure a fallback. See [Model resolution and fallback](configuration.md#model-resolution-and-fallback).

@@ -23,7 +23,7 @@ import type {
 } from "../../core/worktree.ts";
 import {
 	getSubagentProcessIdentityFile,
-	linuxProcessProbe,
+	hostProcessProbe,
 	readLinuxProcessEnvironment,
 	readProcessIdentityRecord,
 	verifyProcessIdentityRecord,
@@ -143,6 +143,8 @@ export interface PiRunningChild {
 	/** Settles when launch-readiness capture verifies or gives up; never rejects. */
 	processIdentityCapture?: Promise<PiProcessIdentity | undefined>;
 	processIdentityError?: string;
+	/** The failure a restarted capture replaced; kept for diagnostics only. */
+	processIdentityLastError?: string;
 }
 
 /** What a captured identity must match: this run, its session, and its pane. */
@@ -291,6 +293,14 @@ export async function captureSurfacePiProcessIdentity(
 ): Promise<PiProcessIdentity> {
 	const timeoutMs = options.timeoutMs ?? 15_000;
 	const intervalMs = options.intervalMs ?? 100;
+	const probe = options.probe ?? hostProcessProbe;
+	// A host that cannot name processes can never verify a record, and its child
+	// cannot have recorded one: report that now instead of waiting out a deadline.
+	try {
+		probe.host();
+	} catch (error) {
+		throw new Error(`Process identity not captured: ${errorMessage(error)}`);
+	}
 	const deadline = Date.now() + timeoutMs;
 	let lastError = "the child has not recorded its process identity";
 	let answered = false;
@@ -316,7 +326,7 @@ export async function captureSurfacePiProcessIdentity(
 				return verifyProcessIdentityRecord(
 					record,
 					{ ...expected, shellPid: info.shellPid },
-					options.probe ?? linuxProcessProbe,
+					probe,
 				);
 			}
 		} catch (error) {
@@ -998,6 +1008,8 @@ export function startProcessIdentityCapture(
 		child.processIdentityError = "process identity capture is unavailable";
 		return;
 	}
+	child.processIdentityLastError =
+		child.processIdentityError ?? child.processIdentityLastError;
 	child.processIdentityError = undefined;
 	child.processIdentityCapture = Promise.resolve()
 		.then(() =>

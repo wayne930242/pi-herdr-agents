@@ -1197,7 +1197,27 @@ describe("PiHarnessAdapter retained worktree kill", () => {
 			assert.equal(calls, 0);
 			assert.deepEqual(signals, []);
 		}));
+	it("a restarted capture still pending names why the previous attempt failed", async () =>
+		usingFixture(async (f) => {
+			const { probe, signals } = fakeProbe(new Map([[20, alive()]]));
+			const w = await worktreeChild(f, {
+				probe,
+				captureError:
+					"Process identity not captured within 15000ms: the child has not recorded its process identity",
+			});
+			w.child.processIdentityFile = join(f.root, "late.process.json");
+			f.operations.captureProcessIdentity = () => new Promise(() => {});
+			await assert.rejects(
+				w.adapter.kill(w.h),
+				/identity capture is still pending; the previous attempt failed: Process identity not captured within 15000ms: the child has not recorded/,
+			);
+			assert.deepEqual(signals, []);
+		}));
 });
+
+// Linux reads /proc and macOS reads ps; any other host captures no identity.
+const HAS_PROCESS_IDENTITY =
+	process.platform === "linux" || process.platform === "darwin";
 
 describe("PiHarnessAdapter retained worktree kill with real processes", () => {
 	async function realChild(f: ReturnType<typeof fixture>, mode: string) {
@@ -1206,10 +1226,11 @@ describe("PiHarnessAdapter retained worktree kill with real processes", () => {
 		const proc = spawnIdentityChild(file, "real-run", sessionFile, mode);
 		await childReady(proc);
 		// Pi's `process.title` rewrite has removed the session from argv.
-		assert.doesNotMatch(
-			readFileSync(`/proc/${proc.pid}/cmdline`, "utf8"),
-			/--session|real-run/,
-		);
+		if (process.platform === "linux")
+			assert.doesNotMatch(
+				readFileSync(`/proc/${proc.pid}/cmdline`, "utf8"),
+				/--session|real-run/,
+			);
 		const captured = await captureSurfacePiProcessIdentity(
 			{
 				getProcessInfo: () => ({
@@ -1255,7 +1276,7 @@ describe("PiHarnessAdapter retained worktree kill with real processes", () => {
 	}
 	it("a title-rewritten Pi that survives SIGTERM is unconfirmed until THAT process exits", async () =>
 		usingFixture(async (f) => {
-			if (process.platform !== "linux") return;
+			if (!HAS_PROCESS_IDENTITY) return;
 			const r = await realChild(f, "ignore-term");
 			try {
 				await assert.rejects(r.adapter.kill(r.h), /is still alive/);
@@ -1269,7 +1290,7 @@ describe("PiHarnessAdapter retained worktree kill with real processes", () => {
 		}));
 	it("a suspended title-rewritten Pi is unconfirmed; resumed, SIGTERM ends it and confirms", async () =>
 		usingFixture(async (f) => {
-			if (process.platform !== "linux") return;
+			if (!HAS_PROCESS_IDENTITY) return;
 			const r = await realChild(f, "default");
 			try {
 				process.kill(r.proc.pid!, "SIGSTOP");

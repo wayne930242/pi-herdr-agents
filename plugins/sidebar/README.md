@@ -19,7 +19,7 @@ The plugin adds two actions. The extension in the main package marks each delega
 ## Requirements
 
 - Herdr `0.9.0` or later. `0.9.0` is the first release with `agent.view.set` and `agent.view.clear`, the only Herdr methods the actions call, so the manifest declares `min_herdr_version = "0.9.0"`. The plugin was tested on `0.9.1` and `0.9.2-preview.2026-09-29-8e78f929d8f0`; other builds are untested. A build without the agent view API makes Focus and All fail with Herdr's error.
-- Linux. The extension identifies child processes through `/proc`, so it marks nothing on other systems, and the manifest declares only `linux`.
+- Linux. The manifest declares only `linux`. The extension identifies child processes through `/proc` (or, on macOS, `ps`) and marks nothing on other systems.
 - `node` on the `PATH` of the Herdr server. Herdr runs the actions as `node sidebar.mjs focus` and `node sidebar.mjs all`.
 - The `pi-herdr-agents` extension version `3.2.0` or later, installed in Pi with `sidebar.enabled` turned on. Without markers, Focus hides nothing.
 

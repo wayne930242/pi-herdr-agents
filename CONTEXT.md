@@ -66,7 +66,7 @@ _Avoid_: Interrupt, suppression, persistent stop, pane-close fallback
 
 **Process identity**:
 A child's Pi process named by immutable kernel facts (PID, start time, boot,
-and PID namespace), recorded by the child at launch and verified by the parent
+and PID namespace; Linux `/proc` or macOS `ps`), recorded by the child at launch and verified by the parent
 against the Herdr pane. Every managed worktree child records it; other children
 record it when sidebar markers are on. A worktree cancel signals and judges
 exit only by it, and a delegated marker renews only while it is alive.

@@ -1,6 +1,6 @@
 import {
+	hostProcessProbe,
 	judgeProcessIdentity,
-	linuxProcessProbe,
 	type PiProcessIdentity,
 	type ProcessIdentityProbe,
 	type ProcessIdentityState,
@@ -72,7 +72,7 @@ export class DelegatedMarkers {
 		now?: () => number;
 	}) {
 		this.write = options.write;
-		this.probe = options.probe ?? linuxProcessProbe;
+		this.probe = options.probe ?? hostProcessProbe;
 		this.now = options.now ?? Date.now;
 	}
 
