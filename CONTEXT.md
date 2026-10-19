@@ -122,7 +122,7 @@ _Avoid_: Manual `subagent_done` for nested children, exit hold, polling for resu
 A child's Pi process named by immutable kernel facts (PID, start time, boot,
 and PID namespace), recorded by the child at launch and verified by the parent
 against the Herdr pane. Every managed worktree child records it. A worktree
-cancel signals and judges exit only by it. It reads Linux `/proc`.
+cancel signals and judges exit only by it. It reads Linux `/proc` or macOS `ps`.
 _Avoid_: argv match, foreground process, shell visibility
 
 **Delegated marker**:

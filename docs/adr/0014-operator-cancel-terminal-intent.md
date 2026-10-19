@@ -1,7 +1,7 @@
 # ADR-0014: Operator cancel records terminal intent before termination
 
 - **Status:** Accepted
-- **Date:** 2026-10-05
+- **Date:** 2026-10-05; amended 2026-10-19 (macOS identity)
 - **Scope:** Public `subagent_cancel` for ordinary managed Pi subagents
 
 ## Context
@@ -66,14 +66,21 @@ kernel producer, adapter, and finalization. It is not a second engine.
    `process.title`, which rewrites `/proc/<pid>/cmdline` and erases
    `--session`, and Herdr lists foreground processes only.
    - *Capture.* The child protocol extension records its own PID, `/proc`
-     start time, boot ID, and PID-namespace link into a once-only sidecar
+     start time, boot ID, and PID namespace into a once-only sidecar
      beside its session (`<session>.process.json`). In the background after
      launch, the parent accepts the record only for this run and session,
      only while that PID is alive with that start time on this boot in the
      parent's own PID namespace (also proven by `/proc/self` naming the
      parent), and only as Herdr's pane shell or a descendant of it. The
      identity lives on the run record. A shell PID merely existing locally is
-     not namespace evidence; the recorded namespace link is.
+     not namespace evidence; the recorded namespace link is. The kernel facts
+     come from a platform probe: Linux `/proc`, and (amendment) macOS `ps`
+     (`ppid`, `state`, `lstart` read under the C locale and UTC, as epoch
+     seconds) plus `sysctl kern.bootsessionuuid`, with the fixed namespace
+     name `darwin:host` because macOS has one PID space. `lstart` resolves one
+     second, so a recycled PID is mistaken for the original only when reused
+     within that second. A host with neither probe fails capture at once and
+     says so, instead of waiting out the deadline.
    - *Signal.* SIGTERM goes only to that identity, re-read (PID and start
      time) immediately before `kill(2)`; a mismatch or read error is never
      signalled. Node exposes no pidfd signal, so the kernel could still reuse
@@ -84,7 +91,7 @@ kernel producer, adapter, and finalization. It is not a second engine.
      known alive; an identity captured during that pane check is judged
      before confirming. A live identity (including a suspended Pi with
      SIGTERM pending) stays unconfirmed. An identity not captured (no record,
-     capture still pending at the kill deadline, a non-Linux host, a handoff
+     capture still pending at the kill deadline, a host with no probe, a handoff
      or resumed child), unreadable, from another boot or PID namespace, or
      whose PID now has another start time is not signalled and is
      unconfirmed unless pane absence confirms termination.
@@ -93,7 +100,9 @@ kernel producer, adapter, and finalization. It is not a second engine.
      deadline, so `unconfirmed` is reported on time; a late answer is
      dropped and never flips a reported outcome. A cancel after the launch
      capture expired starts one fresh capture bounded by that cancel's own
-     deadline, so a retry can pick up a sidecar written late.
+     deadline, so a retry can pick up a sidecar written late. A restarted
+     capture hides the previous failure, so an unconfirmed message that would
+     read only "still pending" also carries the earlier attempt's reason.
 
    The manifest records `cancelled` only for
    confirmed termination, and the handoff is captured as for any completion.
@@ -110,8 +119,9 @@ kernel producer, adapter, and finalization. It is not a second engine.
   or exits. The identity is the child's own report, trusted like its other
   sidecars and bounded by liveness, namespace, and pane-ancestry checks at
   capture.
-- Worktree cancel is Linux-only in effect: elsewhere no identity is captured,
-  nothing is signalled, and only a gone pane confirms.
+- Worktree cancel signals only on Linux and macOS (amendment; it was Linux
+  only): elsewhere no identity is captured, nothing is signalled, and only a
+  gone pane confirms.
 - An unconfirmed cancel can leave a live row indefinitely until a retry, the
   child's exit, manual pane closure, or parent shutdown.
 - Late callbacks after delivery change nothing: the retired ID answers

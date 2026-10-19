@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
 	linkSync,
 	mkdirSync,
@@ -20,11 +21,20 @@ import {
  */
 export interface PiProcessIdentity {
 	pid: number;
-	/** `/proc/<pid>/stat` field 22: clock ticks after boot, fixed at fork. */
+	/**
+	 * Fixed at fork. Linux: `/proc/<pid>/stat` field 22, clock ticks after boot.
+	 * macOS: `ps -o lstart` as UTC epoch seconds.
+	 */
 	startTime: string;
-	/** `/proc/sys/kernel/random/boot_id`; start times are per boot. */
+	/**
+	 * Start times are per boot. Linux: `/proc/sys/kernel/random/boot_id`.
+	 * macOS: `kern.bootsessionuuid`.
+	 */
 	bootId: string;
-	/** `/proc/self/ns/pid` link target; PIDs are per PID namespace. */
+	/**
+	 * PIDs are per PID namespace. Linux: the `/proc/self/ns/pid` link target.
+	 * macOS has none, so every process shares the one fixed namespace name.
+	 */
 	pidNamespace: string;
 }
 
@@ -123,6 +133,156 @@ export function createLinuxProcessProbe(
 
 export const linuxProcessProbe = createLinuxProcessProbe();
 
+export interface ProcessRunResult {
+	status: number | null;
+	stdout: string;
+	stderr: string;
+	error?: Error;
+}
+
+/** Runs one fixed system tool to completion; tests inject a fake. */
+export type ProcessRunner = (file: string, args: string[]) => ProcessRunResult;
+
+const DARWIN_PS = "/bin/ps";
+const DARWIN_SYSCTL = "/usr/sbin/sysctl";
+/** macOS has no PID namespaces: one host-wide PID space. */
+const DARWIN_PID_NAMESPACE = "darwin:host";
+const MONTHS = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
+
+// `lstart` is locale- and zone-dependent text: it is read only under the C
+// locale and UTC, so the recorder and the verifier always produce the same
+// string for one process.
+function runSystemTool(file: string, args: string[]): ProcessRunResult {
+	const result = spawnSync(file, args, {
+		encoding: "utf8",
+		timeout: 3_000,
+		env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	return {
+		status: result.status,
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+		error: result.error,
+	};
+}
+
+// `ppid state lstart`, e.g. `72407 Ss   Mon Oct 19 11:24:33 2026`. The state
+// may carry modifiers (`Ss`, `S+`); its first letter is the process state.
+export function parseDarwinProcessStat(text: string): ProcessStat {
+	const [
+		ppid = "",
+		state = "",
+		,
+		monthName = "",
+		day,
+		time = "",
+		year,
+		...extra
+	] = text.trim().split(/\s+/);
+	const [hour, minute, second, ...clock] = time.split(":");
+	const numbers = [ppid, day, hour, minute, second, year];
+	const month = MONTHS.indexOf(monthName);
+	if (
+		extra.length > 0 ||
+		clock.length > 0 ||
+		month < 0 ||
+		!state ||
+		!numbers.every((field) => field !== undefined && /^\d+$/.test(field))
+	)
+		throw new Error("unparseable ps output");
+	return {
+		state: state.slice(0, 1),
+		ppid: Number(ppid),
+		startTime: String(
+			Date.UTC(
+				Number(year),
+				month,
+				Number(day),
+				Number(hour),
+				Number(minute),
+				Number(second),
+			) / 1000,
+		),
+	};
+}
+
+/**
+ * macOS facts from `ps` and `sysctl`. Start time has one-second resolution,
+ * so a recycled PID is only mistaken for the original when it was reused
+ * within the same second.
+ */
+export function createDarwinProcessProbe(
+	options: { run?: ProcessRunner; platform?: NodeJS.Platform } = {},
+): ProcessIdentityProbe {
+	const run = options.run ?? runSystemTool;
+	const platform = options.platform ?? process.platform;
+	let bootId: string | undefined;
+	return {
+		host() {
+			if (platform !== "darwin")
+				throw new Error(
+					`process identity is unsupported on ${platform}; only macOS ps is read here`,
+				);
+			if (bootId === undefined) {
+				const result = run(DARWIN_SYSCTL, ["-n", "kern.bootsessionuuid"]);
+				if (result.error) throw result.error;
+				const text = result.stdout.trim();
+				if (result.status !== 0 || !text)
+					throw new Error(
+						`sysctl kern.bootsessionuuid exited ${result.status}: ${result.stderr.trim() || "no output"}`,
+					);
+				bootId = text;
+			}
+			return { bootId, pidNamespace: DARWIN_PID_NAMESPACE };
+		},
+		stat(pid) {
+			const result = run(DARWIN_PS, [
+				"-o",
+				"ppid=,state=,lstart=",
+				"-p",
+				String(pid),
+			]);
+			if (result.error) throw result.error;
+			// ps exits 1 with no output for a PID that does not exist.
+			if (result.status === 1 && !result.stdout.trim() && !result.stderr.trim())
+				return undefined;
+			if (result.status !== 0)
+				throw new Error(
+					`ps -p ${pid} exited ${result.status}: ${result.stderr.trim() || "no output"}`,
+				);
+			return parseDarwinProcessStat(result.stdout);
+		},
+		terminate(pid) {
+			process.kill(pid, "SIGTERM");
+		},
+	};
+}
+
+/** The identity probe of the platform this process runs on. */
+export function createHostProcessProbe(
+	platform: NodeJS.Platform = process.platform,
+): ProcessIdentityProbe {
+	return platform === "darwin"
+		? createDarwinProcessProbe({ platform })
+		: createLinuxProcessProbe();
+}
+
+export const hostProcessProbe = createHostProcessProbe();
+
 /**
  * A process's environment as it was at exec. Unlike its command line, Pi's
  * process-title rewrite leaves this intact. `undefined` only when no such PID
@@ -163,7 +323,7 @@ export const readLinuxProcessEnvironment =
 
 /** The calling process's identity; throws when this host cannot establish it. */
 export function readOwnProcessIdentity(
-	probe: ProcessIdentityProbe = linuxProcessProbe,
+	probe: ProcessIdentityProbe = hostProcessProbe,
 ): PiProcessIdentity {
 	const host = probe.host();
 	const stat = probe.stat(process.pid);
@@ -245,7 +405,7 @@ export function readProcessIdentityRecord(
  */
 export function judgeProcessIdentity(
 	identity: PiProcessIdentity,
-	probe: ProcessIdentityProbe = linuxProcessProbe,
+	probe: ProcessIdentityProbe = hostProcessProbe,
 ): ProcessIdentityState {
 	let stat: ProcessStat | undefined;
 	try {
@@ -286,7 +446,7 @@ const MAX_ANCESTRY_DEPTH = 64;
 export function verifyProcessIdentityRecord(
 	record: PiProcessIdentityRecord,
 	expected: { id: string; sessionFile: string; shellPid: number },
-	probe: ProcessIdentityProbe = linuxProcessProbe,
+	probe: ProcessIdentityProbe = hostProcessProbe,
 ): PiProcessIdentity {
 	if (record.id !== expected.id || record.sessionFile !== expected.sessionFile)
 		throw new Error("process identity record belongs to another run");
@@ -323,7 +483,7 @@ export function verifyProcessIdentityRecord(
  */
 export function terminateProcessIdentity(
 	identity: PiProcessIdentity,
-	probe: ProcessIdentityProbe = linuxProcessProbe,
+	probe: ProcessIdentityProbe = hostProcessProbe,
 ): ProcessIdentityState {
 	const state = judgeProcessIdentity(identity, probe);
 	if (state.kind !== "alive") return state;

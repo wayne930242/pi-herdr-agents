@@ -7,7 +7,7 @@ import type {
 import type { WorktreeOperations } from "../../core/worktree.ts";
 import { Deadline } from "../../core/deadline.ts";
 import {
-	linuxProcessProbe,
+	hostProcessProbe,
 	readLinuxProcessEnvironment,
 	readProcessIdentityRecord,
 	verifyProcessIdentityRecord,
@@ -178,6 +178,14 @@ export async function captureSurfacePiProcessIdentity(
 ): Promise<PiProcessIdentity> {
 	const timeoutMs = options.timeoutMs ?? 15_000;
 	const intervalMs = options.intervalMs ?? 100;
+	const probe = options.probe ?? hostProcessProbe;
+	// A host that cannot name processes can never verify a record, and its child
+	// cannot have recorded one: report that now instead of waiting out a deadline.
+	try {
+		probe.host();
+	} catch (error) {
+		throw new Error(`Process identity not captured: ${errorMessage(error)}`);
+	}
 	const deadline = Date.now() + timeoutMs;
 	let lastError = "the child has not recorded its process identity";
 	let answered = false;
@@ -208,7 +216,7 @@ export async function captureSurfacePiProcessIdentity(
 				return verifyProcessIdentityRecord(
 					record,
 					{ ...expected, shellPid: info.shellPid },
-					options.probe ?? linuxProcessProbe,
+					probe,
 				);
 			}
 		} catch (error) {

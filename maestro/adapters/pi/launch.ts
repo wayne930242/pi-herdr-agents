@@ -172,6 +172,8 @@ export interface PiRunningChild {
 	/** Settles when launch-readiness capture verifies or gives up; never rejects. */
 	processIdentityCapture?: Promise<PiProcessIdentity | undefined>;
 	processIdentityError?: string;
+	/** The failure a restarted capture replaced; kept for diagnostics only. */
+	processIdentityLastError?: string;
 }
 
 /** Ownership transfer, not a retryable rejection. The initialized child is real. */
@@ -926,6 +928,8 @@ export function startProcessIdentityCapture(
 		child.processIdentityError = "process identity capture is unavailable";
 		return;
 	}
+	child.processIdentityLastError =
+		child.processIdentityError ?? child.processIdentityLastError;
 	child.processIdentityError = undefined;
 	child.processIdentityCapture = Promise.resolve()
 		.then(() =>

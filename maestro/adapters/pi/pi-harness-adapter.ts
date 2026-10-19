@@ -31,8 +31,8 @@ import {
 import type { FileWakeRegistry } from "../../core/wake.ts";
 import type { SupervisionCoordinator } from "../../core/supervision.ts";
 import {
+	hostProcessProbe,
 	judgeProcessIdentity,
-	linuxProcessProbe,
 	terminateProcessIdentity,
 	type PiProcessIdentity,
 	type ProcessIdentityProbe,
@@ -374,7 +374,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 	 * dropped, so an unconfirmed outcome is reported on time and never flipped.
 	 */
 	private async stopRetainedPi(child: PiRunningChild): Promise<void> {
-		const probe = this.options.processProbe ?? linuxProcessProbe;
+		const probe = this.options.processProbe ?? hostProcessProbe;
 		const retainedDescription = child.worktree
 			? "retained worktree pane"
 			: "caller-provided pane";
@@ -409,7 +409,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 			if (!identity) {
 				if (gone) return;
 				throw new Error(
-					`Owned Pi process identity was not captured for ${retainedDescription} ${child.surface}; nothing was signalled: ${child.processIdentityError ?? (child.processIdentityCapture ? "identity capture is still pending" : "no identity was recorded at launch")}`,
+					`Owned Pi process identity was not captured for ${retainedDescription} ${child.surface}; nothing was signalled: ${describeMissingIdentity(child)}`,
 				);
 			}
 		}
@@ -542,7 +542,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 							child.processIdentity
 								? judgeProcessIdentity(
 										child.processIdentity,
-										this.options.processProbe ?? linuxProcessProbe,
+										this.options.processProbe ?? hostProcessProbe,
 									).kind
 								: "unknown",
 						waitForNextCheck: registration.wait,
@@ -700,6 +700,18 @@ export class PiHarnessAdapter implements HarnessAdapter {
 
 function errorText(cause: unknown): string {
 	return cause instanceof Error ? cause.message : String(cause);
+}
+
+// A restarted capture clears the stored error, so the earlier failure is kept
+// apart: "still pending" alone hides why the first attempt gave up.
+function describeMissingIdentity(child: PiRunningChild): string {
+	if (child.processIdentityError !== undefined)
+		return child.processIdentityError;
+	if (!child.processIdentityCapture)
+		return "no identity was recorded at launch";
+	return child.processIdentityLastError
+		? `identity capture is still pending; the previous attempt failed: ${child.processIdentityLastError}`
+		: "identity capture is still pending";
 }
 
 function describeIdentityState(
