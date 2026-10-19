@@ -107,7 +107,9 @@ follows. A failed watcher can retry observation of the same owner without
 restarting execution. The run settles with one cancelled result only after its owned process
 or pane termination is confirmed; unconfirmed termination keeps it live for a
 retry, and shutdown suppression of it is not a cancellation. A natural result
-taken first stays authoritative.
+taken first stays authoritative. An unconfirmed cancel keeps watching without
+signalling: when its pane or process is later observed gone it settles
+cancelled by itself.
 _Avoid_: Interrupt, suppression, persistent stop, pane-close fallback
 
 **Deferred auto-exit**:

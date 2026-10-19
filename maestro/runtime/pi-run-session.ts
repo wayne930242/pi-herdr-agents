@@ -280,6 +280,7 @@ export function createDefaultRunSession(
 			},
 			roles,
 			cwd: process.cwd(),
+			terminationRecheckMs: options.infrastructure?.terminationRecheckMs,
 			operations: {
 				async prepare(task, role) {
 					const snapshot = state.options.getLaunchSnapshot();

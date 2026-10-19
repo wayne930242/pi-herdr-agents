@@ -139,7 +139,7 @@
 		{
 			"name": "subagent_cancel",
 			"scopes": ["parent", "child"],
-			"description": "Cancel a running ordinary (non-persistent) Pi-backed subagent, including an interrupted one: records terminal intent first, terminates its owned process, and delivers exactly one cancelled result. No model fallback, retry, or recovery starts after a cancel. An ordinary pane is closed; a managed-worktree child stops only its Pi process and keeps the workspace, checkout, commits, and manifest. Returns confirmed, requested (launch still in flight), unconfirmed (the run stays live; call again to retry), or already-terminal. Persistent specialists are rejected; use subagent_stop. Do not poll: the cancelled result arrives automatically.",
+			"description": "Cancel a running ordinary (non-persistent) Pi-backed subagent, including an interrupted one: records terminal intent first, terminates its owned process, and delivers exactly one cancelled result. No model fallback, retry, or recovery starts after a cancel. An ordinary pane is closed; a managed-worktree child stops only its Pi process and keeps the workspace, checkout, commits, and manifest. Returns confirmed, requested (launch still in flight), unconfirmed (the run stays live and settles by itself if its pane or process is later seen gone; call again to retry), or already-terminal. Persistent specialists are rejected; use subagent_stop. Do not poll: the cancelled result arrives automatically.",
 			"parameters": {
 				"type": "object",
 				"properties": {

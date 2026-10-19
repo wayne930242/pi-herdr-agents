@@ -179,7 +179,7 @@ Three tools end or pause work, and each does something different:
 | End an ordinary run | `subagent_cancel({ id \| name })` | Records the cancel first, so no fallback or retry follows. Closes an ordinary pane. A worktree keeps its workspace. One cancelled result arrives. |
 | End a persistent specialist | `subagent_stop({ id \| name })` | Waits for the active task, confirms process exit, then releases the name. |
 
-`subagent_cancel` rejects persistent specialists. If termination cannot be confirmed, cancel reports `unconfirmed`, and the run stays live and supervised. Call it again to retry. Do not poll after a cancel or stop. The result arrives as a message.
+`subagent_cancel` rejects persistent specialists. If termination cannot be confirmed, cancel reports `unconfirmed`, and the run stays live and supervised. Call it again to retry, or let it settle: once the child's pane or Pi process is observed gone, the cancelled result arrives without another call. Do not poll after a cancel or stop. The result arrives as a message.
 
 A child that needs help calls `caller_ping`. An ordinary child exits, and you continue it with `subagent_resume({ sessionPath, message })`. A persistent specialist stays alive, and you answer with `subagent_send`. `subagent_resume` restores the child's launch tool policy and rejects managed-worktree sessions. Continue a worktree child in its retained workspace instead.
 
