@@ -1469,11 +1469,15 @@ function asPiRecord(running: RunningSubagent): PiRunRecord {
 	return running as PiRunRecord;
 }
 
-/** Any running subagent except a persistent specialist idle between tasks. */
+/**
+ * Any running subagent except a persistent specialist idle between tasks or
+ * one whose stop failed, which may never leave the table.
+ */
 export function hasWorkingSubagents(
 	subagents: Iterable<RunningSubagent> = runningSubagents.values(),
 ): boolean {
 	for (const running of subagents) {
+		if (running.stopState === "failed") continue;
 		if (running.persistent && !running.taskId && !running.stopState) continue;
 		return true;
 	}
