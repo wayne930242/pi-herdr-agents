@@ -136,6 +136,10 @@ import type {
 	WorktreeHandoff,
 	WorktreeLaunch,
 } from "../../maestro/core/worktree.ts";
+import {
+	CHILD_BUSY_CHANNEL,
+	type ChildBusyProbe,
+} from "../../maestro/core/child-busy.ts";
 
 // Survive /reload: replace presentation timers while keeping active completion
 // watchers and their registry alive. Old module closures continue watching the
@@ -1471,6 +1475,21 @@ function asPiRecord(running: RunningSubagent): PiRunRecord {
 	return running as PiRunRecord;
 }
 
+/**
+ * Any running subagent except a persistent specialist idle between tasks or
+ * one whose stop failed, which may never leave the table.
+ */
+export function hasWorkingSubagents(
+	subagents: Iterable<RunningSubagent> = runningSubagents.values(),
+): boolean {
+	for (const running of subagents) {
+		if (running.stopState === "failed") continue;
+		if (running.persistent && !running.taskId && !running.stopState) continue;
+		return true;
+	}
+	return false;
+}
+
 function persistentSpecialistState(
 	running: RunningSubagent,
 ): "idle" | "working" | "stalled" | "stopped" {
@@ -2591,8 +2610,16 @@ export default function subagentsExtension(
 		}
 	});
 
+	// A child that is itself waiting on subagents is not asked whether it is done.
+	const stopChildBusy = pi.events.on(CHILD_BUSY_CHANNEL, (raw) => {
+		// SAFETY: the channel's only emitter, isChildBusy, sends a ChildBusyProbe.
+		const probe = raw as ChildBusyProbe | undefined;
+		if (probe && hasWorkingSubagents()) probe.busy = true;
+	});
+
 	// Clean up on session shutdown
 	pi.on("session_shutdown", async (event, _ctx) => {
+		stopChildBusy();
 		// Pi invalidates this context once shutdown returns. Watchers that survive a reload
 		// must not read it before the replacement's session_start sets the next one.
 		runtime.latestCtx = undefined;
