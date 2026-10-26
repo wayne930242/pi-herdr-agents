@@ -43,7 +43,7 @@ Manual deterministic Herdr integration (required before you push a release commi
 npm run test:integration
 ```
 
-Run that suite from inside Herdr. It uses real Pi and Herdr processes with the local deterministic provider, so it needs no provider credentials or network access. `test/integration/sidebar.test.ts` also starts two disposable Herdr servers with their own HOME, configuration, sockets, and plugin registry under the system temporary directory, and removes them afterwards. It needs Linux and skips elsewhere.
+Run that suite from inside Herdr. It uses real Pi and Herdr processes with the local deterministic provider, so it needs no provider credentials or network access. `test/integration/sidebar.test.ts` also starts two disposable Herdr servers with their own HOME, configuration, sockets, and plugin registry under the system temporary directory, installs Herdr's Pi integration into that HOME, runs real `pi` processes there, and removes them afterwards. It needs Linux and a `pi` binary (`PI_BIN` overrides the one on `PATH`) and skips otherwise. `test/integration/sidebar-lifecycle.test.ts` installs the same integration into its isolated agent directory.
 
 The optional live-provider smoke test is not a release gate:
 
@@ -66,7 +66,7 @@ After the package exists on npm, steady-state releases use npm trusted publishin
    - Workflow filename: `publish.yml`
    - Allowed action: `npm publish`
 3. Confirm the release job has `permissions.id-token: write` and runs on a GitHub-hosted runner (already set in `.github/workflows/publish.yml`).
-4. Confirm the workflow uses the exactly pinned Node `26.3.0`, whose bundled npm supports trusted publishing.
+4. Confirm the workflow uses the exactly pinned Node `26.12.1`, whose bundled npm supports trusted publishing.
 5. Publish stays tokenless: `npm publish --access public --provenance`.
 
 When the repository secret `NPM_TOKEN` is absent, the publish step unsets `NODE_AUTH_TOKEN` and relies on OIDC. Once the package exists, the workflow fails if `NPM_TOKEN` is still configured, so steady-state releases cannot silently keep using the bootstrap credential. Manual dispatch runs only from `main`; other refs are rejected.

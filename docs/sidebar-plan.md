@@ -1,5 +1,15 @@
 # Pi Herdr Agents Sidebar plan
 
+> **Superseded marker evidence.** This plan's markers relied on the child's
+> Linux `/proc` process identity, and so the plugin declared only `linux`.
+> Markers now publish and renew only while Herdr reports the child's own
+> session file as the pane's `agent_session`, as Herdr's Pi integration
+> reports it. That works on macOS too, and it removes the accepted
+> suspended-child pane-reuse limitation below. Ordinary and resumed children
+> no longer record a process identity. The shipped contract is in
+> [`plugins/sidebar/README.md`](../plugins/sidebar/README.md); the rest of this
+> plan is the original record.
+
 Status: locally verified and uncommitted, with one accepted limitation. All four
 adversarial reviews have reported and the parent has triaged them. Coverage
 limits and the completed closing review are in

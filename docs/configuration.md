@@ -327,25 +327,31 @@ reach Herdr, so a token still expires at most 15 seconds after the last write
 Herdr accepted. Setting it back to `true` marks only later launches; a child
 that was already running when you turned it off is never marked again.
 
-With markers on, every fresh, resumed, and persistent child records its own
-process identity, as managed worktree children always do. After the parent
-verifies that identity, it reports the pane token `piha_delegated_v1` with the
-value `live`, a 15-second time-to-live, and an increasing sequence number
-through `HERDR_SOCKET_PATH`. It renews the token on supervision checks while
-that exact process is alive. It clears the token when the run finalizes or is
-suppressed, or when the process exits or can no longer be verified. A
-`/worktree` handoff session is never marked.
+With markers on, the parent reads each fresh, resumed, persistent, or managed
+worktree child's pane with `pane.get` through `HERDR_SOCKET_PATH`. Once Herdr
+reports the child's own session file as the pane's `agent_session`, within 15
+seconds of launch, the parent reports the pane token `piha_delegated_v1` with
+the value `live`, a 15-second time-to-live, and an increasing sequence number.
+It renews the token on supervision checks, each time only after Herdr still
+reports that session. Herdr learns each Pi's session from its own Pi
+integration (`herdr integration install pi`), and drops it when that Pi exits
+or is suspended back to the shell prompt, so without the integration nothing is
+marked. The parent clears the token when the run finalizes or is suppressed, or
+when Herdr no longer reports the child's session. A `/worktree` handoff session
+is never marked.
 
-Marker writes never fail a launch or keep Pi running. Each write has a 2-second
-timeout on an unreferenced socket, failed writes are not retried, and three
-failures in a row stop that child's marker. Process identity reads Linux
-`/proc` or macOS `ps`, so on other systems, and outside Herdr, nothing is marked. After a
-parent crash, a marker can remain for up to 15 seconds after the last write
-Herdr applied. A marker belongs to the pane, so a different process started by
-hand in a delegated pane stays hidden by Focus while the original process is
-alive and supervised, even if it is suspended. Run All first or use a fresh
-pane. See [what a marker proves](../plugins/sidebar/README.md#what-a-marker-proves)
-and [reusing a delegated pane](../plugins/sidebar/README.md#reusing-a-delegated-pane).
+Marker reads and writes never fail a launch or keep Pi running. Each has a
+2-second timeout on an unreferenced socket. Before the marker is live, a failed
+read is retried every 250 milliseconds until the 15-second discovery window
+ends. Once it is live, failures are not retried, and three failed renewal
+reads or writes in a row stop that child's marker. Markers work on Linux and macOS;
+outside Herdr nothing is marked. After a parent crash, a marker can remain for
+up to 15 seconds after the last write Herdr applied. A marker belongs to the
+pane, so after the child exits or is suspended, an agent started by hand in
+that pane can stay hidden by Focus until the next renewal clears the marker,
+usually within 5 seconds. See
+[what a marker proves](../plugins/sidebar/README.md#what-a-marker-proves) and
+[reusing a delegated pane](../plugins/sidebar/README.md#reusing-a-delegated-pane).
 
 ## Supervision transport
 
@@ -408,9 +414,9 @@ isolated Herdr tree, not parent-model latency; raw samples are written to
 
 ## Pane placement
 
-`panes.mode` defaults to `"grouped"` when omitted. Ordinary public `subagent` and `subagent_resume` launches, including bare forks, fill extension-owned `Agents`, `Agents 2`, etc. tabs in the existing workspace chosen as described below. `panes.maxPerTab` is a positive safe integer, defaults to `4`, and counts all live panes in each owned tab, including user-added panes and retained shells. Overlapping launches in one parent respect this cap. It is independent of `persistent.maxAgents`.
+`panes.mode` defaults to `"grouped"` when omitted. Ordinary public `subagent` and `subagent_resume` launches, including bare forks, fill extension-owned `Agents`, `Agents 2`, etc. tabs in the target checkout's existing workspace. `panes.maxPerTab` is a positive safe integer, defaults to `4`, and counts all live panes in each owned tab, including user-added panes and retained shells. Overlapping launches in one parent respect this cap. It is independent of `persistent.maxAgents`.
 
-Checkout matching uses Herdr's canonical `worktree.checkout_path` and includes descendant directories. A shell working directory never makes a workspace the target; it only keeps a child beside its caller. A child stays in the caller's workspace when that workspace is the match, or when the caller pane's own `cwd` or `foreground_cwd` lies inside the matched checkout (an unbound workspace running in the same project); it moves to the matched workspace only for a different project. If no checkout matches (including non-Git directories), placement uses the caller's workspace; overflow never creates a workspace. A reviewer with `cwd` set to a managed checkout joins that workspace without creating another worktree. Resume placement uses the saved session's cwd.
+Checkout matching uses Herdr's canonical `worktree.checkout_path` and includes descendant directories. Shell working directories do not establish workspace ownership. If no checkout matches (including non-Git directories), placement uses the caller's workspace; overflow never creates a workspace. A reviewer with `cwd` set to a managed checkout joins that workspace without creating another worktree. Resume placement uses the saved session's cwd.
 
 Explicit `panes.mode: "tab"` preserves one new tab per ordinary child in the caller's workspace. Explicit `"split"` preserves splits of the stable parent pane. `panes.direction` is `"right"` (default) or `"down"` and applies to grouped and legacy splits. `maxPerTab` does not affect these legacy modes. Managed worktrees retain their separate workspaces.
 

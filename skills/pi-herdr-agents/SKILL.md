@@ -276,9 +276,11 @@ Setup has two separate parts: **install the Herdr plugin** and **enable markers
 in the Pi extension**. Neither alone enables sidebar filtering.
 
 1. Check the installed extension supports `sidebar.enabled`, and check the
-   guide's Herdr compatibility requirements. Markers require Linux; the Herdr
-   server needs `node` on its `PATH`. Use `pi list` to check package sources;
-   do not load two copies of the extension.
+   guide's Herdr compatibility requirements. Markers work on Linux and macOS
+   and need Herdr's Pi integration (`herdr integration install pi`) in the
+   agent directory children use; the Herdr server needs `node` on its
+   `PATH`. Use `pi list` to check package sources; do not load two copies of
+   the extension.
 2. Review the plugin source, then follow the guide to install
    `giuseppecrj/pi-herdr-agents/plugins/sidebar` with `herdr plugin install`,
    or link an existing compatible directory with `herdr plugin link`.

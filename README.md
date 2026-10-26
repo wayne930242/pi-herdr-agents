@@ -179,7 +179,7 @@ Three tools end or pause work, and each does something different:
 | End an ordinary run | `subagent_cancel({ id \| name })` | Records the cancel first, so no fallback or retry follows. Closes an ordinary pane. A worktree keeps its workspace. One cancelled result arrives. |
 | End a persistent specialist | `subagent_stop({ id \| name })` | Waits for the active task, confirms process exit, then releases the name. |
 
-`subagent_cancel` rejects persistent specialists. If termination cannot be confirmed, cancel reports `unconfirmed`, and the run stays live and supervised. Call it again to retry, or let it settle: once the child's pane or Pi process is observed gone, the cancelled result arrives without another call. Do not poll after a cancel or stop. The result arrives as a message.
+`subagent_cancel` rejects persistent specialists. If termination cannot be confirmed, cancel reports `unconfirmed`, and the run stays live and supervised. Call it again to retry. Do not poll after a cancel or stop. The result arrives as a message.
 
 A child that needs help calls `caller_ping`. An ordinary child exits, and you continue it with `subagent_resume({ sessionPath, message })`. A persistent specialist stays alive, and you answer with `subagent_send`. `subagent_resume` restores the child's launch tool policy and rejects managed-worktree sessions. Continue a worktree child in its retained workspace instead.
 
@@ -250,8 +250,9 @@ A `read, bash` allowlist is not a read-only boundary, because shell commands can
 
 The optional [Pi Herdr Agents Sidebar](plugins/sidebar/README.md) Herdr plugin adds two actions. Focus hides delegated Pi children from Herdr's Agents view. All removes this plugin's filter. It needs:
 
-- `pi-herdr-agents` version `3.2.0` or later, with `sidebar.enabled` turned on
-- Linux, because the plugin manifest declares only `linux` (the extension identifies child processes through `/proc` or, on macOS, `ps`)
+- `pi-herdr-agents` version `3.2.0` or later, with `sidebar.enabled` turned on. On macOS, a release newer than `3.2.1`.
+- Linux or macOS
+- Herdr's Pi integration (`herdr integration install pi`), which reports each child's session to Herdr. The extension marks a child only while Herdr reports that child's own session.
 - Herdr `0.9.0` or later, the first release with the agent view API. Tested on `0.9.1` and `0.9.2-preview.2026-09-29-8e78f929d8f0`; other builds are untested.
 - `node` on the `PATH` of the Herdr server
 
@@ -284,7 +285,7 @@ Setup has two parts. Neither part works alone.
 
 Focus replaces the server-wide Agents view, including any filter set by another tool. All clears only this plugin's view and leaves another tool's view untouched.
 
-Focus is display only. Hidden children keep running and still raise notifications. Blocked children and children with unknown status stay visible. The marker follows the pane, not the process, so run All before you start another agent by hand in a delegated pane. See [Sidebar markers](docs/configuration.md#sidebar-markers) and the plugin's [limits](plugins/sidebar/README.md#reusing-a-delegated-pane).
+Focus is display only. Hidden children keep running and still raise notifications. Blocked children and children with unknown status stay visible. The marker follows the pane and is cleared within about 5 seconds after the child exits or is suspended, so an agent you start by hand in a delegated pane can stay hidden that long. See [Sidebar markers](docs/configuration.md#sidebar-markers) and the plugin's [limits](plugins/sidebar/README.md#reusing-a-delegated-pane).
 
 ## Configuration
 
@@ -306,7 +307,7 @@ See [Configuration](docs/configuration.md) for every key, the task-model writer,
 - Child agents are real Pi processes running with your user account's permissions, inside Herdr panes. Worktrees isolate Git checkouts, not processes or permissions.
 - The extension creates Herdr panes, tabs and managed worktrees only when a launch asks for them. It never pushes, merges, opens pull requests, deletes branches or removes worktrees on its own; cleanup is an explicit parent action ([worktree cleanup](docs/tools.md#explicit-worktree-cleanup)).
 - What it writes: `$PI_CODING_AGENT_DIR/herdr-agents/config.json` (only through `/subagents-init` or the writer tool, never on startup); per-launch artifacts under the parent session's `artifacts/<session-id>/` directory beside Pi's session store, which hold the child's full task text and any `systemPrompt` as Markdown files, activity snapshots and worktree manifests; and the child's own Pi session file. A managed worktree that carries its own `.pi/agent` directory receives that child's session inside the checkout. Treat task text as potentially sensitive when you share or inspect those files.
-- Managed worktree children record their PID, process start time, boot ID, and PID namespace in `<session>.process.json` beside their session. With [`sidebar.enabled`](docs/configuration.md#sidebar-markers), every other child records the same facts, and a resumed child records them under `artifacts/<session-id>/process-identity/`. The parent then reports one display-only pane token, `piha_delegated_v1`, on each child's pane through the Herdr socket. With the setting off, the extension writes no pane metadata.
+- Managed worktree children record their PID, process start time, boot ID, and PID namespace in `<session>.process.json` beside their session. With [`sidebar.enabled`](docs/configuration.md#sidebar-markers), the parent reads each child pane's agent session from Herdr and reports one display-only pane token, `piha_delegated_v1`, on that pane through the Herdr socket. With the setting off, the extension writes no pane metadata.
 - To uninstall: first list and remove any retained worktrees while the extension is still loaded (`/worktree list`, then `/worktree remove <target>`), because those commands leave with the package. If you installed the optional sidebar plugin, remove it with `herdr plugin uninstall pi-herdr-agents.sidebar` (or `herdr plugin unlink` for a linked copy). Then run `pi remove npm:pi-herdr-agents`, and delete `$PI_CODING_AGENT_DIR/herdr-agents/` and the `artifacts/` directories above if you no longer want the configuration and launch records.
 
 ## Troubleshooting

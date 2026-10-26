@@ -293,7 +293,7 @@ test("release workflow uses package.json identity and trusted publishing", async
 	assert.match(workflow, /concurrency:\n\s+group: pi-herdr-agents-release/);
 	assert.match(workflow, /id-token:\s*write/);
 	assert.match(workflow, /contents:\s*write/);
-	assert.match(workflow, /node-version:\s*26\.3\.0/);
+	assert.match(workflow, /node-version:\s*26\.12\.1/);
 	assert.doesNotMatch(workflow, /npm install -g/);
 	assert.doesNotMatch(workflow, /uses:\s+[^\s@]+@v\d/);
 	assert.match(
