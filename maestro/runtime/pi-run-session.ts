@@ -809,7 +809,10 @@ export function createDefaultRunSession(
 				input.role.defaults?.persistent ??
 				false,
 			candidates: input.plans,
-			async spawnAttempt(_spawn: SpawnOptions, index, cancelled) {
+			async spawnAttempt(_spawn: SpawnOptions, index, signal) {
+				// A kernel adopted across /reload from before d027daa passes no signal;
+				// it cannot cancel an acquisition, so a never-aborted one stands in.
+				const cancelled: AbortSignal = signal ?? new AbortController().signal;
 				const plan = input.plans[index];
 				attempts.push(plan.model);
 				const acquisition = { taskId: input.task.id, suppressed: false };
