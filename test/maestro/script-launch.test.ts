@@ -441,9 +441,12 @@ async function withFakeHerdr<T>(
 	run: (herdr: FakeHerdr) => Promise<T>,
 ): Promise<T> {
 	const dir = mkdtempSync(join(tmpdir(), "script-launch-"));
-	const bin = join(dir, "herdr");
-	writeFileSync(bin, "#!/bin/sh\nexit 0\n");
-	chmodSync(bin, 0o755);
+	// Spoofed win32 runs resolve `herdr.exe`; every other platform the bare name.
+	for (const name of ["herdr", "herdr.exe"]) {
+		const bin = join(dir, name);
+		writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+		chmodSync(bin, 0o755);
+	}
 	const saved = { env: process.env.HERDR_ENV, path: process.env.PATH };
 	process.env.HERDR_ENV = "1";
 	process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;

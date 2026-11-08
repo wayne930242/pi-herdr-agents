@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { existsSync } from "node:fs";
+import { executableOnPath } from "../../core/executable-on-path.ts";
 import type {
 	HarnessAdapter,
 	ResumeOptions,
@@ -137,15 +137,7 @@ export class PiHarnessAdapter implements HarnessAdapter {
 			);
 	}
 	isAvailable(): boolean {
-		return (process.env.PATH ?? "").split(delimiter).some((directory) => {
-			try {
-				const path = join(directory, "pi");
-				accessSync(path, constants.X_OK);
-				return statSync(path).isFile();
-			} catch {
-				return false;
-			}
-		});
+		return executableOnPath("pi", process.platform, process.env);
 	}
 	async spawn(opts: PiSpawnOptions): Promise<AgentHandle> {
 		this.rejectEnvironment(opts.env);

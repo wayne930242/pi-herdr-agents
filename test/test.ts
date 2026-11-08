@@ -31,6 +31,7 @@ import { cleanupFixture } from "./worktree-cleanup-fixture.ts";
 import assert from "node:assert/strict";
 import {
 	existsSync,
+	chmodSync,
 	mkdtempSync,
 	writeFileSync,
 	readFileSync,
@@ -97,7 +98,11 @@ import {
 	type SessionEntry,
 } from "../maestro/adapters/pi/session.ts";
 
-import { isHerdrAvailable } from "../maestro/surfaces/herdr/herdr-cli.ts";
+import { executableOnPath } from "../maestro/core/executable-on-path.ts";
+import {
+	herdrOnPath,
+	isHerdrAvailable,
+} from "../maestro/surfaces/herdr/herdr-cli.ts";
 import { waitForProcessesExit } from "../maestro/surfaces/herdr/herdr-pane.ts";
 import { __herdrTest__ } from "../maestro/surfaces/herdr/herdr.ts";
 import {
@@ -15779,6 +15784,76 @@ describe("herdr.ts", () => {
 		it("returns boolean based on HERDR_ENV", () => {
 			const result = isHerdrAvailable();
 			assert.ok(result === true || result === false);
+		});
+
+		function withBinDir(files: string[], run: (dir: string) => void): void {
+			const dir = mkdtempSync(join(tmpdir(), "herdr-path-"));
+			try {
+				for (const file of files) {
+					writeFileSync(join(dir, file), "");
+					chmodSync(join(dir, file), 0o755);
+				}
+				run(dir);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		}
+
+		it("finds herdr.exe on win32 with the default PATHEXT", () => {
+			withBinDir(["herdr.exe"], (dir) => {
+				assert.equal(herdrOnPath("win32", { HERDR_ENV: "1", PATH: dir }), true);
+			});
+		});
+
+		it("honors PATHEXT on win32", () => {
+			withBinDir(["herdr.bin"], (dir) => {
+				const env = { HERDR_ENV: "1", PATH: dir };
+				assert.equal(herdrOnPath("win32", env), false);
+				assert.equal(
+					herdrOnPath("win32", { ...env, PATHEXT: ".EXE;.bin" }),
+					true,
+				);
+				assert.equal(herdrOnPath("win32", { ...env, Pathext: ".bin" }), true);
+			});
+		});
+
+		it("misses on win32 when herdr is absent", () => {
+			withBinDir(["other.exe"], (dir) => {
+				assert.equal(
+					herdrOnPath("win32", { HERDR_ENV: "1", PATH: dir }),
+					false,
+				);
+			});
+		});
+
+		it("probes only the bare name outside win32", () => {
+			withBinDir(["herdr.exe"], (dir) => {
+				const env = { HERDR_ENV: "1", PATH: dir };
+				assert.equal(herdrOnPath("linux", env), false);
+			});
+			withBinDir(["herdr"], (dir) => {
+				const env = { HERDR_ENV: "1", PATH: dir };
+				assert.equal(herdrOnPath("linux", env), true);
+				assert.equal(herdrOnPath("darwin", env), true);
+			});
+		});
+
+		it("resolves any executable name through PATHEXT on win32", () => {
+			withBinDir(["pi.cmd"], (dir) => {
+				const env = { PATH: dir };
+				assert.equal(executableOnPath("pi", "win32", env), true);
+				assert.equal(executableOnPath("pi", "linux", env), false);
+			});
+		});
+
+		it("requires HERDR_ENV=1", () => {
+			withBinDir(["herdr", "herdr.exe"], (dir) => {
+				assert.equal(herdrOnPath("win32", { PATH: dir }), false);
+				assert.equal(
+					herdrOnPath("linux", { HERDR_ENV: "0", PATH: dir }),
+					false,
+				);
+			});
 		});
 	});
 

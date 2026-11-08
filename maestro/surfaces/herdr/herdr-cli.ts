@@ -1,6 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { executableOnPath } from "../../core/executable-on-path.ts";
 import { isString } from "../../core/config/type-guards.ts";
 import { Deadline } from "../../core/deadline.ts";
 import { gitEnvironment } from "../../core/git-environment.ts";
@@ -12,17 +11,17 @@ export const HERDR_RECONCILE_TIMEOUT_MS = 6_000;
 export const HERDR_COSMETIC_TIMEOUT_MS = 1_000;
 export const HERDR_OUTPUT_BYTES = 1024 * 1024;
 
+/** Whether `herdr` is on PATH for the platform and `HERDR_ENV` is set. */
+export function herdrOnPath(
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv,
+): boolean {
+	if (env.HERDR_ENV !== "1") return false;
+	return executableOnPath("herdr", platform, env);
+}
+
 export function isHerdrAvailable(): boolean {
-	if (process.env.HERDR_ENV !== "1") return false;
-	return (process.env.PATH ?? "").split(delimiter).some((directory) => {
-		try {
-			const path = join(directory, "herdr");
-			accessSync(path, constants.X_OK);
-			return statSync(path).isFile();
-		} catch {
-			return false;
-		}
-	});
+	return herdrOnPath(process.platform, process.env);
 }
 
 export function parseHerdrJson(value: string) {
