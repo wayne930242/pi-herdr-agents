@@ -447,8 +447,15 @@ async function withFakeHerdr<T>(
 		writeFileSync(bin, "#!/bin/sh\nexit 0\n");
 		chmodSync(bin, 0o755);
 	}
-	const saved = { env: process.env.HERDR_ENV, path: process.env.PATH };
+	const saved = {
+		env: process.env.HERDR_ENV,
+		path: process.env.PATH,
+		pathext: process.env.PATHEXT,
+	};
 	process.env.HERDR_ENV = "1";
+	// Spoofed win32 runs read PATHEXT; pin it to the fixture's casing so the
+	// case-sensitive Linux file system resolves `herdr.exe` too.
+	process.env.PATHEXT = ".exe";
 	process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;
 	const herdr: FakeHerdr = { runCommands: [], processInfoCalls: 0 };
 	try {
@@ -468,6 +475,8 @@ async function withFakeHerdr<T>(
 		if (saved.env === undefined) delete process.env.HERDR_ENV;
 		else process.env.HERDR_ENV = saved.env;
 		process.env.PATH = saved.path;
+		if (saved.pathext === undefined) delete process.env.PATHEXT;
+		else process.env.PATHEXT = saved.pathext;
 		rmSync(dir, { recursive: true, force: true });
 	}
 }

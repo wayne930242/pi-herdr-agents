@@ -15799,30 +15799,58 @@ describe("herdr.ts", () => {
 			}
 		}
 
-		it("finds herdr.exe on win32 with the default PATHEXT", () => {
+		it("finds herdr.exe on win32 with an explicit PATHEXT", () => {
 			withBinDir(["herdr.exe"], (dir) => {
+				const env = { HERDR_ENV: "1", PATH: dir, PATHEXT: ".exe" };
+				assert.equal(herdrOnPath("win32", env), true);
+			});
+		});
+
+		it("falls back to the default PATHEXT on win32 when it is unset", () => {
+			// The default list is uppercase; name the fixture to match so the
+			// case-sensitive Linux file system finds it too.
+			withBinDir(["herdr.EXE"], (dir) => {
 				assert.equal(herdrOnPath("win32", { HERDR_ENV: "1", PATH: dir }), true);
 			});
 		});
 
 		it("honors PATHEXT on win32", () => {
 			withBinDir(["herdr.bin"], (dir) => {
-				const env = { HERDR_ENV: "1", PATH: dir };
+				const env = { HERDR_ENV: "1", PATH: dir, PATHEXT: ".exe" };
 				assert.equal(herdrOnPath("win32", env), false);
 				assert.equal(
-					herdrOnPath("win32", { ...env, PATHEXT: ".EXE;.bin" }),
+					herdrOnPath("win32", { ...env, PATHEXT: ".exe;.bin" }),
 					true,
 				);
-				assert.equal(herdrOnPath("win32", { ...env, Pathext: ".bin" }), true);
+			});
+		});
+
+		it("matches PATH and PATHEXT keys case-insensitively only on win32", () => {
+			withBinDir(["herdr.bin", "herdr"], (dir) => {
+				const env = { HERDR_ENV: "1", Path: dir, Pathext: ".bin" };
+				assert.equal(herdrOnPath("win32", env), true);
+				// POSIX env keys are exact: `Path` is not `PATH`.
+				assert.equal(herdrOnPath("linux", env), false);
+				assert.equal(herdrOnPath("darwin", env), false);
+			});
+		});
+
+		it("strips one pair of quotes from a PATH entry on win32 only", () => {
+			withBinDir(["herdr.exe", "herdr"], (dir) => {
+				const env = { HERDR_ENV: "1", PATH: `"${dir}"`, PATHEXT: ".exe" };
+				assert.equal(herdrOnPath("win32", env), true);
+				assert.equal(herdrOnPath("linux", env), false);
+				assert.equal(
+					herdrOnPath("win32", { ...env, PATH: `""${dir}""` }),
+					false,
+				);
 			});
 		});
 
 		it("misses on win32 when herdr is absent", () => {
 			withBinDir(["other.exe"], (dir) => {
-				assert.equal(
-					herdrOnPath("win32", { HERDR_ENV: "1", PATH: dir }),
-					false,
-				);
+				const env = { HERDR_ENV: "1", PATH: dir, PATHEXT: ".exe" };
+				assert.equal(herdrOnPath("win32", env), false);
 			});
 		});
 
@@ -15840,7 +15868,7 @@ describe("herdr.ts", () => {
 
 		it("resolves any executable name through PATHEXT on win32", () => {
 			withBinDir(["pi.cmd"], (dir) => {
-				const env = { PATH: dir };
+				const env = { PATH: dir, PATHEXT: ".cmd" };
 				assert.equal(executableOnPath("pi", "win32", env), true);
 				assert.equal(executableOnPath("pi", "linux", env), false);
 			});
@@ -15848,7 +15876,10 @@ describe("herdr.ts", () => {
 
 		it("requires HERDR_ENV=1", () => {
 			withBinDir(["herdr", "herdr.exe"], (dir) => {
-				assert.equal(herdrOnPath("win32", { PATH: dir }), false);
+				assert.equal(
+					herdrOnPath("win32", { PATH: dir, PATHEXT: ".exe" }),
+					false,
+				);
 				assert.equal(
 					herdrOnPath("linux", { HERDR_ENV: "0", PATH: dir }),
 					false,
