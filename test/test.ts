@@ -5353,7 +5353,7 @@ describe("model configuration", () => {
 				configPath,
 				tasks: { coding: ["fake/worker"] },
 				tasksMeta,
-				missingCategories: ["review", "recon", "qa", "architecture", "docs"],
+				missingCategories: ["complex-coding", "review", "recon", "qa", "architecture", "docs"],
 				configRevision: readConfigRevision(configPath),
 			});
 			const before = readFileSync(configPath, "utf8");
@@ -5529,7 +5529,7 @@ describe("model configuration", () => {
 		);
 		assert.throws(
 			() => parseModelConfig({ models: { tasks: { debugging: ["fake/x"] } } }),
-			/models\.tasks\.debugging.*supported categories: coding, review, recon, qa, architecture, docs/,
+			/models\.tasks\.debugging.*supported categories: coding, complex-coding, review, recon, qa, architecture, docs/,
 		);
 		assert.throws(
 			() => parseModelConfig({ models: { tasks: { coding: null } } }),
@@ -10675,6 +10675,7 @@ describe("commands", () => {
 			);
 			assert.deepEqual(brief.categories, {
 				coding: "Implementation workers",
+				"complex-coding": "Complex or high-risk implementation workers",
 				review: "Code reviewers",
 				recon: "Reconnaissance scouts",
 				qa: "Software and test runners",
@@ -11247,7 +11248,7 @@ describe("commands", () => {
 			)!;
 			assert.deepEqual(
 				Object.keys(writer.parameters.properties.tasks.properties),
-				["coding", "review", "recon", "qa", "architecture", "docs"],
+				["coding", "complex-coding", "review", "recon", "qa", "architecture", "docs"],
 			);
 			assert.equal(
 				writer.parameters.properties.tasks.additionalProperties,
@@ -11277,7 +11278,7 @@ describe("commands", () => {
 				configPath,
 				tasks: { coding: ["fake/worker"] },
 				tasksMeta,
-				missingCategories: ["review", "recon", "qa", "architecture", "docs"],
+				missingCategories: ["complex-coding", "review", "recon", "qa", "architecture", "docs"],
 				configRevision: readConfigRevision(configPath),
 			});
 			assert.match(result.content[0].text, /Reload required/);

@@ -178,7 +178,7 @@ Set each child's exact authenticated `provider/model-id` and a supported thinkin
 
 Then set thinking within that model's range. Without `model`, a child uses agent frontmatter, then `models.agents.<name>`, then `models.default`, then the parent model. Without `thinking`, it uses the role's thinking level when set, otherwise the parent level.
 
-A `model` value can also be an ordered fallback list, such as `provider/preferred, provider/fallback`, or a whole-value `task:<category>`. Task categories are `coding`, `review`, `recon`, `qa`, `architecture`, and `docs`. Their candidates come from `models.tasks` in `config.json`. Run `/subagents-init` to draft those preferences from your authenticated models, then `/reload`:
+A `model` value can also be an ordered fallback list, such as `provider/preferred, provider/fallback`, or a whole-value `task:<category>`. Task categories are `coding`, `complex-coding`, `review`, `recon`, `qa`, `architecture`, and `docs`. Their candidates come from `models.tasks` in `config.json`. Run `/subagents-init` to draft those preferences from your authenticated models, then `/reload`:
 
 ```text
 /subagents-init Prefer capability over price for implementation; keep recon inexpensive

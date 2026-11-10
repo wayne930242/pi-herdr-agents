@@ -588,6 +588,7 @@ Registered in: parent sessions.
 | --- | --- | --- | --- |
 | `tasks` | object | yes | — |
 | `tasks.coding` | string[] | no | Implementation workers |
+| `tasks.complex-coding` | string[] | no | Complex or high-risk implementation workers |
 | `tasks.review` | string[] | no | Code reviewers |
 | `tasks.recon` | string[] | no | Reconnaissance scouts |
 | `tasks.qa` | string[] | no | Software and test runners |
