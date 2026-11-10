@@ -1,3 +1,4 @@
+import "./clean-host-env.ts";
 import {
 	captureWorktreeHandoff,
 	writeWorktreeManifest,
@@ -34,6 +35,7 @@ import {
 	mkdtempSync,
 	writeFileSync,
 	readFileSync,
+	realpathSync,
 	mkdirSync,
 	readdirSync,
 	renameSync,
@@ -242,7 +244,7 @@ after(() => {
 // --- Helpers ---
 
 function createTestDir(): string {
-	return mkdtempSync(join(tmpdir(), "subagents-test-"));
+	return realpathSync(mkdtempSync(join(tmpdir(), "subagents-test-")));
 }
 
 function createSessionFile(dir: string, entries: object[]): string {
@@ -706,9 +708,10 @@ async function withAdapterHost(run: (f: any) => Promise<void>) {
 			writeFileSync(`${child.sessionFile}.exit`, JSON.stringify(result));
 			// Observe this actual attempt, not the logical producer that may continue
 			// through another candidate. The real adapter/coordinator still reads it.
-			// Persistent shell evidence waits for the shared reconciliation cadence,
-			// not just a local sidecar wake (which cannot prove process exit).
-			const deadline = Date.now() + (child.persistent ? 8_000 : 3_000);
+			// File wakes are best-effort (notably on macOS); allow the 4.8-second
+			// reconciliation fallback for ordinary runs too. Persistent shell
+			// evidence always needs reconciliation to prove process exit.
+			const deadline = Date.now() + 8_000;
 			while (
 				child.lifecycle.process.kind !== "completed" &&
 				child.lifecycle.process.kind !== "failed"
@@ -738,6 +741,7 @@ async function withAdapterHost(run: (f: any) => Promise<void>) {
 				handle: (child: any) =>
 					runtime.session.getHandle(runtime.session.getControlTaskId(child.id)),
 				registrations: () => registrations,
+				wake,
 			});
 		} finally {
 			for (const child of runtime.runningSubagents.values()) {
@@ -988,8 +992,20 @@ describe("host adapter migration", () => {
 
 	for (const boundary of ["adapter", "finalizer"])
 		for (const accepted of [true, false])
-			it(`ordinary ${boundary} transcript failure preserves Stage3 payload and ${accepted ? "nonblocking close" : "rejected-send manual retention"}`, async () =>
+			it(`ordinary ${boundary} transcript failure preserves Stage3 payload and ${accepted ? "nonblocking close" : "rejected-send manual retention"}${boundary === "adapter" && accepted ? " without file wakes" : ""}`, async () =>
 				withAdapterHost(async (f) => {
+					const missedWake = boundary === "adapter" && accepted;
+					if (missedWake) {
+						// Directory notifications are best-effort. Keep the real watch and
+						// coordinator, but drop its notification to exercise reconciliation.
+						const register = f.wake.register.bind(f.wake);
+						f.patch(
+							f.wake,
+							"register",
+							(file: string, _wake: () => void, fallback: () => void) =>
+								register(file, () => {}, fallback),
+						);
+					}
 					writeAgentFile(
 						f.projectAgentsDir,
 						"error-role",
@@ -1055,6 +1071,12 @@ describe("host adapter migration", () => {
 						await close(id);
 					});
 					try {
+						if (missedWake)
+							await until(
+								f,
+								() => f.wake.retainedWaits > 0,
+								"parked completion waiter",
+							);
 						if (boundary === "adapter") mkdirSync(child.sessionFile);
 						else
 							writeFileSync(
@@ -1073,11 +1095,11 @@ describe("host adapter migration", () => {
 								errorMessage: "real provider evidence",
 							}),
 						);
-						const deadline = Date.now() + 3000;
-						while (session.getTask(controlTaskId)) {
-							assert.ok(Date.now() < deadline);
-							await f.turn();
-						}
+						await until(
+							f,
+							() => !session.getTask(controlTaskId),
+							"ordinary transcript-failure retirement",
+						);
 						await f.turn();
 						assert.equal(completions.length, boundary === "finalizer" ? 1 : 0);
 						if (boundary === "finalizer") {
@@ -1110,7 +1132,9 @@ describe("host adapter migration", () => {
 						});
 						assert.ok(Number.isInteger(message.details.elapsed));
 						assert.ok(
-							message.details.elapsed >= 12 && message.details.elapsed <= 14,
+							message.details.elapsed >= 12 &&
+								message.details.elapsed <=
+									Math.floor((Date.now() - child.startTime) / 1000),
 						);
 						// Stage3 watchSubagent catch -> fallback wrapper -> ordinary .then:
 						// no result runtimePlan/session/errorMessage; details retain the live plan.
@@ -2347,11 +2371,11 @@ describe("host adapter migration", () => {
 					};
 					if (boundary === "adapter") corrupt();
 					writeFileSync(`${path}.exit`, JSON.stringify({ type: "done" }));
-					const deadline = Date.now() + 3000;
-					while (session.getTask(control)) {
-						assert.ok(Date.now() < deadline);
-						await f.turn();
-					}
+					await until(
+						f,
+						() => !session.getTask(control),
+						"resumed transcript-failure retirement",
+					);
 					assert.equal(
 						owner.entries.size,
 						0,
@@ -2497,11 +2521,11 @@ describe("host adapter migration", () => {
 										: { type: "done" },
 							),
 						);
-					const deadline = Date.now() + 3000;
-					while (session.getTask(control)) {
-						assert.ok(Date.now() < deadline);
-						await f.turn();
-					}
+					await until(
+						f,
+						() => !session.getTask(control),
+						"resumed result retirement",
+					);
 					assert.equal(
 						owner.entries.size,
 						0,
@@ -2731,16 +2755,16 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 			"name",
 		]);
 		for (const pattern of [
-			/terminal intent first/,
 			/exactly one cancelled result/,
-			/No model fallback, retry, or recovery/,
+			/no model fallback, retry, or recovery/i,
 			/keeps the workspace, checkout, commits, and manifest/,
 			/confirmed, requested .*unconfirmed .*already-terminal/,
 			/Persistent specialists are rejected; use subagent_stop/,
 			/Do not poll/,
 		])
 			assert.match(tool.description, pattern);
-		assert.equal(tool.promptSnippet, tool.description);
+		assert.ok(tool.promptSnippet.length < 100, tool.promptSnippet);
+		assert.doesNotMatch(tool.promptSnippet, /\n/);
 		assert.equal(
 			subagentsModule.__test__
 				.resolveDenyTools({ spawning: false })
@@ -2795,7 +2819,7 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 			assert.equal(response.details.id, child.id);
 			assert.match(
 				response.content[0].text,
-				/pane was closed and Herdr confirmed it is gone\. No model fallback, retry, or recovery will start\./,
+				/owned process exit is confirmed\. No model fallback, retry, or recovery will start\./,
 			);
 			await until(f, () => results(f).length === 1, "the cancelled result");
 			const [delivered] = results(f);
@@ -8148,6 +8172,140 @@ describe("subagent-done.ts", () => {
 		}
 	});
 
+	it("resumes activity recording when a persistent specialist receives its next task", async () => {
+		const dir = createTestDir();
+		const envKeys = [
+			"PI_SUBAGENT_PERSISTENT",
+			"PI_SUBAGENT_SESSION",
+			"PI_SUBAGENT_TASK_ID",
+			"PI_SUBAGENT_GENERATION_ID",
+			"PI_SUBAGENT_AUTO_EXIT",
+			"PI_SUBAGENT_ID",
+			"PI_SUBAGENT_ACTIVITY_FILE",
+		];
+		const previous = Object.fromEntries(
+			envKeys.map((key) => [key, process.env[key]]),
+		);
+		const sessionFile = join(dir, "persistent-activity.jsonl");
+		const activityFile = getSubagentActivityFile(dir, "persistent-child");
+		process.env.PI_SUBAGENT_PERSISTENT = "1";
+		process.env.PI_SUBAGENT_SESSION = sessionFile;
+		process.env.PI_SUBAGENT_TASK_ID = "task-1";
+		process.env.PI_SUBAGENT_GENERATION_ID = "generation";
+		process.env.PI_SUBAGENT_ID = "persistent-child";
+		process.env.PI_SUBAGENT_ACTIVITY_FILE = activityFile;
+		delete process.env.PI_SUBAGENT_AUTO_EXIT;
+		let shutdown: Function | undefined;
+		const read = () => {
+			const result = readSubagentActivityFile(activityFile, "persistent-child");
+			assert.ok(result.ok);
+			return result.activity;
+		};
+		try {
+			const { api, eventHandlers, registeredTools, sentUserMessages } =
+				createMockExtensionApi();
+			subagentDoneExtension(api);
+			shutdown = eventHandlers.get("session_shutdown")?.[0];
+			const fire = (name: string, event: any = {}) =>
+				eventHandlers.get(name)?.[0](event, {
+					ui: { setWidget() {} },
+					shutdown() {},
+				});
+			const done = registeredTools.find(
+				(tool) => tool.name === "subagent_done",
+			);
+			assert.ok(done);
+
+			fire("session_start");
+			fire("agent_start");
+			fire("tool_execution_start", { toolCallId: "t1", toolName: "bash" });
+			assert.equal(read().phase, "active");
+
+			// First task ends with subagent_done; the tool's own trailing events
+			// and the closing agent_end must not undo the final snapshot.
+			await done.execute("call", {}, undefined, undefined, {});
+			fire("tool_execution_end", {
+				toolCallId: "done-1",
+				toolName: "subagent_done",
+			});
+			fire("agent_end", { messages: [] });
+			assert.equal(read().phase, "done");
+
+			writePersistentTaskInbox(sessionFile, 1, {
+				task: "task-2",
+				message: "next",
+			});
+			await new Promise((resolve) => setTimeout(resolve, 1_100));
+			assert.deepEqual(sentUserMessages, ["next"]);
+			assert.notEqual(read().phase, "done");
+			assert.equal(read().phase, "active");
+
+			fire("input");
+			fire("before_agent_start");
+			fire("agent_start");
+			fire("tool_execution_start", { toolCallId: "t2", toolName: "read" });
+			const working = read();
+			assert.equal(working.phase, "active");
+			assert.equal(working.activeScope, "tool");
+			assert.equal(working.toolName, "read");
+
+			await done.execute("call", {}, undefined, undefined, {});
+			fire("agent_end", { messages: [] });
+			assert.equal(read().phase, "done");
+		} finally {
+			shutdown?.({ reason: "reload" });
+			for (const key of envKeys) restoreEnvVar(key, previous[key]);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a non-persistent child's done snapshot final", async () => {
+		const dir = createTestDir();
+		const envKeys = [
+			"PI_SUBAGENT_PERSISTENT",
+			"PI_SUBAGENT_SESSION",
+			"PI_SUBAGENT_AUTO_EXIT",
+			"PI_SUBAGENT_ID",
+			"PI_SUBAGENT_ACTIVITY_FILE",
+		];
+		const previous = Object.fromEntries(
+			envKeys.map((key) => [key, process.env[key]]),
+		);
+		const activityFile = getSubagentActivityFile(dir, "plain-child");
+		delete process.env.PI_SUBAGENT_PERSISTENT;
+		delete process.env.PI_SUBAGENT_AUTO_EXIT;
+		process.env.PI_SUBAGENT_SESSION = join(dir, "plain.jsonl");
+		process.env.PI_SUBAGENT_ID = "plain-child";
+		process.env.PI_SUBAGENT_ACTIVITY_FILE = activityFile;
+		try {
+			const { api, eventHandlers, registeredTools } = createMockExtensionApi();
+			subagentDoneExtension(api);
+			const fire = (name: string, event: any = {}) =>
+				eventHandlers.get(name)?.[0](event, {
+					ui: { setWidget() {} },
+					shutdown() {},
+				});
+			const done = registeredTools.find(
+				(tool) => tool.name === "subagent_done",
+			);
+			assert.ok(done);
+			fire("session_start");
+			fire("agent_start");
+			await done.execute("call", {}, undefined, undefined, {
+				shutdown() {},
+			});
+			fire("agent_start");
+			fire("tool_execution_start", { toolCallId: "t1", toolName: "bash" });
+			const result = readSubagentActivityFile(activityFile, "plain-child");
+			assert.ok(result.ok);
+			assert.equal(result.activity.phase, "done");
+			assert.equal(result.activity.latestEvent, "subagent_done");
+		} finally {
+			for (const key of envKeys) restoreEnvVar(key, previous[key]);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps polling paused after reload while a dispatched follow-up remains unsettled", async () => {
 		const dir = createTestDir();
 		const previousPersistent = process.env.PI_SUBAGENT_PERSISTENT;
@@ -8992,6 +9150,214 @@ describe("subagent-done.ts", () => {
 			restoreEnvVar("PI_SUBAGENT_AUTO_EXIT", previousAutoExit);
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	describe("persistent caller_ping", () => {
+		const envKeys = [
+			"PI_SUBAGENT_PERSISTENT",
+			"PI_SUBAGENT_SESSION",
+			"PI_SUBAGENT_TASK_ID",
+			"PI_SUBAGENT_GENERATION_ID",
+			"PI_SUBAGENT_AUTO_EXIT",
+		];
+		const withHelpingSpecialist = async (
+			run: (child: {
+				sessionFile: string;
+				mock: ReturnType<typeof createMockExtensionApi>;
+				ping: () => Promise<void>;
+			}) => Promise<void>,
+		) => {
+			const dir = createTestDir();
+			const previous = Object.fromEntries(
+				envKeys.map((key) => [key, process.env[key]]),
+			);
+			const sessionFile = join(dir, "persistent-help.jsonl");
+			process.env.PI_SUBAGENT_PERSISTENT = "1";
+			process.env.PI_SUBAGENT_SESSION = sessionFile;
+			process.env.PI_SUBAGENT_TASK_ID = "task-1";
+			process.env.PI_SUBAGENT_GENERATION_ID = "generation";
+			delete process.env.PI_SUBAGENT_AUTO_EXIT;
+			let shutdown: Function | undefined;
+			try {
+				const mock = createMockExtensionApi();
+				subagentDoneExtension(mock.api);
+				shutdown = mock.eventHandlers.get("session_shutdown")?.[0];
+				const pingTool = mock.registeredTools.find(
+					(tool) => tool.name === "caller_ping",
+				);
+				assert.ok(pingTool);
+				await run({
+					sessionFile,
+					mock,
+					ping: async () => {
+						await pingTool.execute(
+							"call",
+							{ message: "which schema?" },
+							undefined,
+							undefined,
+							{},
+						);
+					},
+				});
+			} finally {
+				shutdown?.({ reason: "reload" });
+				for (const key of envKeys) restoreEnvVar(key, previous[key]);
+				rmSync(dir, { recursive: true, force: true });
+			}
+		};
+
+		it("ends the task, so the run's settlement reports no second result", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock, ping }) => {
+				await ping();
+				const messages = [{ role: "assistant", stopReason: "stop" }];
+				const ctx = {
+					sessionManager: {
+						getBranch: () =>
+							messages.map((message) => ({ type: "message", message })),
+					},
+				};
+				mock.eventHandlers.get("agent_end")?.[0]({ messages }, ctx);
+				mock.eventHandlers.get("agent_settled")?.[0]({ aborted: false }, ctx);
+				assert.deepEqual(
+					readPersistentTaskEvents(sessionFile).map((event) => [
+						event.type,
+						event.task,
+					]),
+					[["help-request", "task-1"]],
+				);
+			});
+		});
+
+		it("takes the answer from the inbox before the run settles", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock, ping }) => {
+				await ping();
+				writePersistentTaskInbox(sessionFile, 1, {
+					task: "answer-task",
+					message: "use schema v2",
+				});
+				await new Promise((resolve) => setTimeout(resolve, 1_100));
+				assert.deepEqual(mock.sentUserMessages, ["use schema v2"]);
+			});
+		});
+
+		it("queues the answer behind the run that is still streaming", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock, ping }) => {
+				const queued: Array<{ message: string; deliverAs: string }> = [];
+				const rejected: string[] = [];
+				// Like Pi, a streaming session rejects a user message without deliverAs.
+				mock.api.sendUserMessage = async (
+					message: string,
+					options?: { deliverAs?: string },
+				) => {
+					if (options?.deliverAs)
+						queued.push({ message, deliverAs: options.deliverAs });
+					else rejected.push(message);
+				};
+				await ping();
+				writePersistentTaskInbox(sessionFile, 1, {
+					task: "answer-task",
+					message: "use schema v2",
+				});
+				await new Promise((resolve) => setTimeout(resolve, 1_100));
+				assert.deepEqual(rejected, []);
+				assert.deepEqual(queued, [
+					{ message: "use schema v2", deliverAs: "followUp" },
+				]);
+			});
+		});
+
+		const callSubagentDone = async (
+			mock: ReturnType<typeof createMockExtensionApi>,
+		) => {
+			const doneTool = mock.registeredTools.find(
+				(tool) => tool.name === "subagent_done",
+			);
+			assert.ok(doneTool);
+			let shutdowns = 0;
+			await doneTool.execute("call", {}, undefined, undefined, {
+				shutdown: () => shutdowns++,
+			});
+			return shutdowns;
+		};
+
+		it("stays alive for the answer when subagent_done follows caller_ping", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock, ping }) => {
+				await ping();
+				assert.equal(await callSubagentDone(mock), 0);
+				assert.equal(existsSync(`${sessionFile}.exit`), false);
+				assert.deepEqual(
+					readPersistentTaskEvents(sessionFile).map((event) => [
+						event.type,
+						event.task,
+					]),
+					[["help-request", "task-1"]],
+				);
+			});
+		});
+
+		it("stays alive when subagent_done is called with no current task", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock }) => {
+				assert.equal(await callSubagentDone(mock), 0);
+				assert.equal(await callSubagentDone(mock), 0);
+				assert.equal(existsSync(`${sessionFile}.exit`), false);
+				assert.deepEqual(
+					readPersistentTaskEvents(sessionFile).map((event) => [
+						event.type,
+						event.task,
+					]),
+					[["task-done", "task-1"]],
+				);
+			});
+		});
+
+		const startSession = (
+			mock: ReturnType<typeof createMockExtensionApi>,
+			idle: boolean,
+		) => {
+			const calls: string[] = [];
+			mock.eventHandlers.get("session_start")?.[0](
+				{ reason: "startup" },
+				{
+					ui: { setWidget() {} },
+					isIdle: () => idle,
+					abort: () => calls.push("abort"),
+					shutdown: () => calls.push("shutdown"),
+				},
+			);
+			return calls;
+		};
+
+		it("aborts the leftover run when a stop arrives while it streams", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock, ping }) => {
+				const calls = startSession(mock, false);
+				await ping();
+				writePersistentTaskInbox(sessionFile, 1, {
+					type: "stop",
+					task: "stop",
+					message: "",
+				});
+				await new Promise((resolve) => setTimeout(resolve, 1_100));
+				assert.deepEqual(calls, ["abort", "shutdown"]);
+			});
+		});
+
+		it("stops an idle specialist without aborting", async () => {
+			await withHelpingSpecialist(async ({ sessionFile, mock }) => {
+				const calls = startSession(mock, true);
+				const doneTool = mock.registeredTools.find(
+					(tool) => tool.name === "subagent_done",
+				);
+				assert.ok(doneTool);
+				await doneTool.execute("call", {}, undefined, undefined, {});
+				writePersistentTaskInbox(sessionFile, 1, {
+					type: "stop",
+					task: "stop",
+					message: "",
+				});
+				await new Promise((resolve) => setTimeout(resolve, 1_100));
+				assert.deepEqual(calls, ["shutdown"]);
+			});
+		});
 	});
 
 	it("leaves non-auto-exit coordinators open until subagent_done", async () => {
@@ -10749,6 +11115,113 @@ describe("commands", () => {
 		assert.equal(sentUserMessages.length, 1);
 	});
 
+	it("keeps the task-model writer inactive until /subagents-init needs it", async () => {
+		const dir = createTestDir();
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = dir;
+		try {
+			const writeOnce = async (userActivated: boolean) => {
+				const { api, registeredCommands, registeredTools, sentUserMessages } =
+					createMockExtensionApi();
+				subagentsModule.default(api);
+				const writerActive = () =>
+					api.getActiveTools().includes("subagents_write_task_models");
+				assert.equal(writerActive(), false, "inactive after load");
+				if (userActivated)
+					api.setActiveTools([
+						...api.getActiveTools(),
+						"subagents_write_task_models",
+					]);
+				await registeredCommands
+					.find((command) => command.name === "subagents-init")!
+					.handler("", initContext({ getAvailable: () => [INIT_MODEL] }));
+				assert.equal(sentUserMessages.length, 1);
+				assert.equal(writerActive(), true, "active while init runs");
+				const writer = registeredTools.find(
+					(tool) => tool.name === "subagents_write_task_models",
+				)!;
+				await assert.rejects(
+					writer.execute(
+						"invalid-init-write",
+						{ tasks: {}, tasksMeta: { method: "registry-only" } },
+						undefined,
+						undefined,
+						{ modelRegistry: { getAvailable: () => [] } },
+					),
+				);
+				assert.equal(writerActive(), true, "a failed write remains retryable");
+				await writer.execute(
+					"init-write",
+					{
+						tasks: { coding: ["p/m"] },
+						tasksMeta: {
+							generatedAt: "2026-09-18T00:00:00Z",
+							method: "registry-only",
+						},
+					},
+					undefined,
+					undefined,
+					{
+						modelRegistry: {
+							find: () => INIT_MODEL,
+							getAvailable: () => [INIT_MODEL],
+							hasConfiguredAuth: () => true,
+						},
+					},
+				);
+				return writerActive();
+			};
+			assert.equal(
+				await writeOnce(false),
+				false,
+				"a successful write deactivates a writer that init activated",
+			);
+			assert.equal(
+				await writeOnce(true),
+				false,
+				"a successful write also deactivates an explicitly activated or restored writer",
+			);
+		} finally {
+			restoreEnvVar("PI_CODING_AGENT_DIR", previous);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("deactivates the task-model writer when init does not start", async () => {
+		const { api, invalidate, registeredCommands } = createMockExtensionApi();
+		subagentsModule.default(api);
+		invalidate();
+		const notifications: string[] = [];
+		await registeredCommands
+			.find((command) => command.name === "subagents-init")!
+			.handler(
+				"",
+				initContext({ getAvailable: () => [INIT_MODEL] }, notifications),
+			);
+		assert.match(notifications[0], /Pi did not accept the init prompt/);
+		assert.equal(
+			api.getActiveTools().includes("subagents_write_task_models"),
+			false,
+		);
+	});
+
+	it("a failed init does not release a writer activated by an earlier init", async () => {
+		const { api, invalidate, registeredCommands } = createMockExtensionApi();
+		subagentsModule.default(api);
+		const init = registeredCommands.find(
+			(command) => command.name === "subagents-init",
+		)!;
+		const context = initContext({ getAvailable: () => [INIT_MODEL] });
+		await init.handler("", context);
+		assert.ok(api.getActiveTools().includes("subagents_write_task_models"));
+		invalidate();
+		await init.handler("", context);
+		assert.ok(
+			api.getActiveTools().includes("subagents_write_task_models"),
+			"a failed submission can undo only this invocation's activation",
+		);
+	});
+
 	it("returns saved tool details and text from normalized config while preserving unrelated preferences", async () => {
 		const dir = createTestDir();
 		const previous = process.env.PI_CODING_AGENT_DIR;
@@ -11507,13 +11980,13 @@ describe("tool registration", () => {
 			/explicitly set both model and thinking for every child/,
 		);
 		assert.match(
-			subagent.promptGuidelines.join("\n"),
+			subagent.parameters.properties.model.description,
 			/For ordinary review, prefer a different authenticated model family/,
 		);
-		assert.match(
+		assert.doesNotMatch(
 			subagent.promptGuidelines.join("\n"),
 			/context-isolated/,
-			"injected routing guidelines must describe context-isolated same-family fallback",
+			"the model parameter carries review policy without repeating it in guidelines",
 		);
 		assert.match(
 			subagent.promptGuidelines.join("\n"),
@@ -11753,6 +12226,11 @@ describe("tool registration", () => {
 			"Disclose that this review is context-isolated, not cross-family independent.",
 			"Cross-family verification must not use this fallback.",
 		];
+		const { api, registeredTools } = createMockExtensionApi();
+		subagentsModule.default(api);
+		const modelDescription = registeredTools.find(
+			(tool) => tool.name === "subagent",
+		).parameters.properties.model.description;
 		const preferenceCases: Array<[string, TaskPreferences]> = [
 			["shortlist", { coding: ["fake/worker"] }],
 			["generic", {}],
@@ -11763,20 +12241,28 @@ describe("tool registration", () => {
 				24,
 				taskPreferences,
 			);
-			const combined = subagentsModule.__test__
-				.buildSubagentRoutingGuidelines(catalog, taskPreferences)
+			const combined = [
+				...subagentsModule.__test__.buildSubagentRoutingGuidelines(
+					catalog,
+					taskPreferences,
+				),
+				modelDescription,
+			]
 				.join("\n")
 				.replace(/\s+/g, " ")
 				.trim();
 			for (const clause of clauses)
-				assert.ok(
-					combined.includes(clause),
-					`${label} combined guidance must include: ${clause}`,
+				assert.equal(
+					combined.split(clause).length - 1,
+					1,
+					`${label} combined guidance must state once: ${clause}`,
 				);
 			if (label === "generic") {
-				const orchestratedLine = catalog
-					.split("\n")
-					.find((line) => line.startsWith("For orchestrated children"));
+				const orchestratedLine = subagentsModule.__test__
+					.buildSubagentRoutingGuidelines(catalog, taskPreferences)
+					.find((line: string) =>
+						line.startsWith("For orchestrated subagent work"),
+					);
 				assert.ok(orchestratedLine);
 				assert.doesNotMatch(
 					orchestratedLine,
@@ -11786,12 +12272,45 @@ describe("tool registration", () => {
 		}
 	});
 
-	it("states the complete ordinary-review taxonomy in routing guidelines", () => {
-		const guidelines = subagentsModule.__test__
-			.buildSubagentRoutingGuidelines("catalog", { coding: ["fake/worker"] })
-			.join("\n")
-			.replace(/\s+/g, " ")
-			.trim();
+	it("keeps Core capability limits while shortening launch and control snippets", () => {
+		const { api, registeredTools } = createMockExtensionApi();
+		subagentsModule.default(api);
+		const launch = registeredTools.find((tool) => tool.name === "subagent");
+		const resume = registeredTools.find(
+			(tool) => tool.name === "subagent_resume",
+		);
+		const cancel = registeredTools.find(
+			(tool) => tool.name === "subagent_cancel",
+		);
+		for (const tool of [launch, resume, cancel]) {
+			assert.ok(tool);
+			assert.ok(tool.promptSnippet.length < 100, tool.promptSnippet);
+			assert.doesNotMatch(tool.promptSnippet, /\n/);
+			assert.match(tool.description, /Do not poll/i);
+		}
+		for (const tool of [launch, resume])
+			assert.match(
+				tool.description,
+				/legacy Herdr pane or local Core terminal/,
+			);
+		assert.match(launch.description, /Managed worktrees require legacy Herdr/);
+		assert.match(
+			launch.description,
+			/without Desktop Agents tabs or sidebar integration/,
+		);
+		assert.match(
+			launch.parameters.properties.worktree.description,
+			/legacy Herdr only, not Core/,
+		);
+		assert.match(resume.description, /does not reattach a retained worktree/);
+		assert.match(cancel.description, /Core confirms.*exit.*after delivery/);
+	});
+
+	it("keeps the complete review policy in the schema when custom prompts omit guidelines", () => {
+		const { api, registeredTools } = createMockExtensionApi();
+		subagentsModule.default(api);
+		const description = registeredTools.find((tool) => tool.name === "subagent")
+			.parameters.properties.model.description;
 		for (const clause of [
 			"For ordinary review, prefer a different authenticated model family.",
 			"When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session.",
@@ -11799,8 +12318,8 @@ describe("tool registration", () => {
 			"Cross-family verification must not use this fallback.",
 		])
 			assert.ok(
-				guidelines.includes(clause),
-				`routing guidelines must include: ${clause}`,
+				description.includes(clause),
+				`the always-sent model schema must include: ${clause}`,
 			);
 	});
 
@@ -11958,31 +12477,20 @@ describe("tool registration", () => {
 		assert.match(subagentTool.description, /retain.*parent review/i);
 	});
 
-	it("describes the complete ordinary-review taxonomy in the model parameter", () => {
+	it("keeps model selection mechanics alongside the review policy", () => {
 		const { api, registeredTools } = createMockExtensionApi();
 		subagentsModule.default(api);
 		const subagentTool = registeredTools.find(
 			(tool) => tool.name === "subagent",
 		);
-		const modelDesc = (
-			subagentTool.parameters.properties.model.description ?? ""
-		)
-			.replace(/\s+/g, " ")
-			.trim();
-		for (const clause of [
-			"For ordinary review, prefer a different authenticated model family.",
-			"When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session.",
-			"Disclose that this review is context-isolated, not cross-family independent.",
-			"Cross-family verification must not use this fallback.",
-		])
-			assert.ok(
-				modelDesc.includes(clause),
-				`model description must include: ${clause}`,
-			);
-		assert.doesNotMatch(
-			modelDesc,
-			/when unavailable/i,
-			"model description must use the authenticated-family availability gate",
+		const modelDesc =
+			subagentTool.parameters.properties.model.description ?? "";
+		assert.match(modelDesc, /task:<category>/);
+		assert.match(modelDesc, /fallback lists are rejected/);
+		assert.match(modelDesc, /ordinary review|context-isolated/i);
+		assert.match(
+			subagentTool.parameters.properties.thinking.description,
+			/low for mechanical work, medium for ordinary work, and high\+/,
 		);
 	});
 
@@ -12452,6 +12960,66 @@ describe("subagent activity snapshots", () => {
 			assert.ok(read.ok);
 			assert.equal(read.activity.toolActive, false);
 			assert.equal(read.activity.activeScope, "turn");
+		});
+	});
+
+	it("lets a persistent recorder leave done only through taskStart", () => {
+		withTempDir((dir) => {
+			let currentNow = 1_000;
+			const activityFile = getSubagentActivityFile(dir, "child-p");
+			const recorder = createSubagentActivityRecorder({
+				runningChildId: "child-p",
+				activityFile,
+				persistent: true,
+				now: () => currentNow,
+			});
+			const phase = () => {
+				const read = readSubagentActivityFile(activityFile, "child-p");
+				assert.ok(read.ok);
+				return read.activity;
+			};
+
+			recorder.sessionStart();
+			recorder.agentStart();
+			recorder.subagentDone();
+			recorder.agentEndWaiting();
+			recorder.toolExecutionStart("t", "bash");
+			assert.equal(phase().phase, "done");
+			assert.equal(phase().latestEvent, "subagent_done");
+
+			currentNow = 2_000;
+			recorder.taskStart();
+			assert.equal(phase().phase, "active");
+			assert.equal(phase().activeScope, "agent");
+			assert.equal(phase().agentActive, true);
+
+			recorder.toolExecutionStart("t", "bash");
+			assert.equal(phase().activeScope, "tool");
+			recorder.callerPing();
+			assert.equal(phase().phase, "done");
+			assert.equal(phase().latestEvent, "caller_ping");
+
+			recorder.sessionShutdown("quit");
+			assert.equal(phase().latestEvent, "session_shutdown");
+			assert.equal(phase().phase, "done");
+		});
+	});
+
+	it("ignores taskStart on a non-persistent recorder after done", () => {
+		withTempDir((dir) => {
+			const activityFile = getSubagentActivityFile(dir, "child-n");
+			const recorder = createSubagentActivityRecorder({
+				runningChildId: "child-n",
+				activityFile,
+				now: () => 1_000,
+			});
+			recorder.sessionStart();
+			recorder.subagentDone();
+			recorder.taskStart();
+			recorder.agentStart();
+			const read = readSubagentActivityFile(activityFile, "child-n");
+			assert.ok(read.ok);
+			assert.equal(read.activity.phase, "done");
 		});
 	});
 

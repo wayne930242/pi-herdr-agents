@@ -1,3 +1,4 @@
+import "./clean-host-env.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -252,7 +253,9 @@ test("CI checks pushes and pull requests without release authority", async () =>
 });
 
 test("CI runs the local gates with the release workflow's pinned tools", async () => {
-	const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+	const workflow = (await readFile(".github/workflows/ci.yml", "utf8")).split(
+		"\n  windows-unit:",
+	)[0];
 	const release = await readFile(".github/workflows/publish.yml", "utf8");
 	const actions = [...workflow.matchAll(/uses: (\S+)/g)].map(
 		(match) => match[1],
@@ -272,12 +275,91 @@ test("CI runs the local gates with the release workflow's pinned tools", async (
 		[
 			"npm ci",
 			"npm run format:check",
+			"npm run docs:tools:check",
 			"npm run lint",
 			"npm run typecheck",
 			"npm test",
 			"npm pack --dry-run",
 			"git diff --check",
 		],
+	);
+});
+
+test("CI runs only unit tests on Windows without blocking", async () => {
+	const workflow = await readFile(".github/workflows/ci.yml", "utf8");
+	const [checks, windows] = workflow.split("\n  windows-unit:");
+
+	assert.ok(windows, "missing Windows unit job");
+	assert.match(windows, /name: Unit tests \(Windows, non-blocking\)/);
+	assert.match(windows, /^    runs-on: windows-latest$/m);
+	assert.match(windows, /^    continue-on-error: true$/m);
+	assert.match(windows, /^    timeout-minutes: 20$/m);
+	assert.match(windows, /persist-credentials: false/);
+	assert.match(windows, /package-manager-cache: false/);
+	assert.deepEqual(
+		[...windows.matchAll(/uses: (\S+)/g)].map((match) => match[1]),
+		[...checks.matchAll(/uses: (\S+)/g)].map((match) => match[1]),
+	);
+	assert.equal(
+		windows.match(/node-version: (\S+)/)?.[1],
+		checks.match(/node-version: (\S+)/)?.[1],
+	);
+	assert.deepEqual(
+		[...windows.matchAll(/^\s+run: (.+)$/gm)].map((match) => match[1]),
+		["npm ci", "npm test"],
+	);
+});
+
+test("Linux integration pins its tools and always cleans up without publication authority", async () => {
+	const workflow = await readFile(
+		".github/workflows/linux-integration.yml",
+		"utf8",
+	);
+	assert.match(workflow, /^  push:\n    branches:\n      - main$/m);
+	assert.match(workflow, /^  workflow_dispatch:$/m);
+	assert.match(workflow, /^permissions:\n  contents: read$/m);
+	assert.doesNotMatch(
+		workflow,
+		/pull_request_target|:\s*write\b|secrets\.|id-token:|continue-on-error|npm publish|gh release/,
+	);
+	assert.match(workflow, /runs-on: ubuntu-24\.04/);
+	assert.match(workflow, /timeout-minutes: 45/);
+	assert.match(workflow, /persist-credentials: false/);
+	assert.match(workflow, /v0\.9\.5\/herdr-linux-x86_64/);
+	assert.match(workflow, /core\/0\.1\.17\/herdr-core-linux-x86_64\.tar\.gz/);
+	assert.equal(workflow.match(/sha256sum --check/g)?.length, 2);
+	assert.match(workflow, /PI_TEST_LIVE=0/);
+	assert.match(workflow, /scripts\/run-linux-integration\.ts/);
+	assert.match(
+		workflow,
+		/name: Shut down the owned legacy lab\n        if: always\(\)/,
+	);
+	assert.match(workflow, /scripts\/lab\.ts down/);
+	assert.match(
+		workflow,
+		/name: Upload deterministic test evidence\n        if: always\(\)/,
+	);
+	assert.match(
+		workflow,
+		/actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/,
+	);
+	assert.doesNotMatch(workflow, /uses:\s+[^\s@]+@v\d/);
+	assert.match(workflow, /retention-days: 7/);
+});
+
+test("Linux integration driver rejects missing prerequisites instead of skipping", () => {
+	assert.throws(
+		() =>
+			execFileSync(
+				process.execPath,
+				["--experimental-strip-types", "scripts/run-linux-integration.ts"],
+				{
+					env: { ...process.env, HERDR_BIN: "", PI_TEST_LIVE: "0" },
+					stdio: "pipe",
+					timeout: 10_000,
+				},
+			),
+		/Linux \/proc is required|HERDR_BIN must be set/,
 	);
 });
 

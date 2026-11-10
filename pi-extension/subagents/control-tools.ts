@@ -15,10 +15,12 @@ import {
 } from "../../maestro/core/host-text.ts";
 import {
 	SUBAGENT_CANCEL_DESCRIPTION,
+	SUBAGENT_CANCEL_SNIPPET,
 	type SubagentCancelDetails,
 	type Controls,
 } from "./controls.ts";
 import type { PersistentControls } from "./persistent.ts";
+import { ROUTINE_TOOL_EXPOSURE } from "./deferred-tools.ts";
 
 function formatSupervisionDiagnostics(
 	runtime: SubagentRuntime,
@@ -60,6 +62,7 @@ export function registerControlTools(
 	if (shouldRegister("subagent_send"))
 		pi.registerTool({
 			name: "subagent_send",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Send Persistent Task",
 			description:
 				"Deliver one follow-up task to an idle persistent specialist. Busy specialists reject tasks; no queue is kept.",
@@ -99,9 +102,10 @@ export function registerControlTools(
 	if (shouldRegister("subagent_stop"))
 		pi.registerTool({
 			name: "subagent_stop",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Stop Persistent Specialist",
 			description:
-				"Gracefully stop a persistent specialist after its active task settles. Exit is confirmed before the specialist is removed.",
+				"Stop a persistent specialist after its active task finishes.",
 			parameters: Type.Object({
 				id: Type.Optional(
 					Type.String({
@@ -138,15 +142,12 @@ export function registerControlTools(
 	if (shouldRegister("subagent_interrupt"))
 		pi.registerTool({
 			name: "subagent_interrupt",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Interrupt Subagent",
 			description:
-				"Send Escape to the active turn of a currently running Pi-backed subagent. " +
-				"The child pane, session, watcher, and running entry remain alive; this returns only a local acknowledgement " +
-				"and does not emit a subagent_result solely because of this request.",
+				"Send Escape to a running subagent's active turn. The subagent keeps running, and this call delivers no result.",
 			promptSnippet:
-				"Send Escape to the active turn of a currently running Pi-backed subagent. " +
-				"The child pane, session, watcher, and running entry remain alive; this returns only a local acknowledgement " +
-				"and does not emit a subagent_result solely because of this request.",
+				"Send Escape to a running subagent's active turn without ending the subagent",
 			parameters: Type.Object({
 				id: Type.Optional(
 					Type.String({ description: "Exact running subagent id" }),
@@ -199,9 +200,10 @@ export function registerControlTools(
 	if (shouldRegister("subagent_cancel"))
 		pi.registerTool({
 			name: "subagent_cancel",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Cancel Subagent",
 			description: SUBAGENT_CANCEL_DESCRIPTION,
-			promptSnippet: SUBAGENT_CANCEL_DESCRIPTION,
+			promptSnippet: SUBAGENT_CANCEL_SNIPPET,
 			parameters: Type.Object({
 				id: Type.Optional(
 					Type.String({ description: "Exact running subagent id" }),
@@ -254,13 +256,11 @@ export function registerControlTools(
 	if (shouldRegister("subagents_list"))
 		pi.registerTool({
 			name: "subagents_list",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "List Subagents",
 			description:
-				"List all available package, global, and project subagent definitions. " +
-				"Project agents override global definitions, which override package definitions.",
-			promptSnippet:
-				"List all available package, global, and project subagent definitions. " +
-				"Project agents override global definitions, which override package definitions.",
+				"List subagent role definitions, live persistent specialists, and the supervision mode.",
+			promptSnippet: "List the subagent role definitions available to launch",
 			parameters: Type.Object({}),
 
 			async execute() {

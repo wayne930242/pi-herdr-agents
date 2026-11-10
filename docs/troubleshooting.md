@@ -2,6 +2,19 @@
 
 This page collects the checks for common problems. Each section links to the full reference.
 
+## Core selection or missing Desktop placement
+
+Check [`herdr.backend`](configuration.md#herdr-backend) and the current native
+terminal context. Auto selects Core from `HC_TERMINAL_ID`, not from installed
+binaries or a running Desktop. A missing/incompatible socket is an error, never a
+reason to switch to legacy automatically. Restart Pi to change its backend,
+endpoint or parent-terminal binding; reload cannot redirect existing children.
+
+Core ordinary children run in the background. Desktop Agents tabs/sidebar parity,
+remote terminals and managed worktrees are not implemented. The legacy Node
+sidebar plugin cannot be installed as a Desktop mod. Do not work around those
+limits by altering the daily layout or reusing unrelated terminal IDs.
+
 ## Troubleshooting completion delivery
 
 If a child finishes but the parent returns an empty or unrelated response, first verify that the result reached the parent session:
@@ -21,14 +34,35 @@ pi install git:github.com/giuseppecrj/pi-herdr-agents@main
 
 Smoke-test delivery with an autonomous subagent instructed to return one exact marker. Success means the marker itself—not only a generic wake-up notice—automatically appears in the parent turn.
 
-Subagent tabs, panes, and worktree workspaces are created without stealing keyboard focus. Launch commands target child panes by explicit ID, so focus and command delivery are independent. If a fresh or resumed launch fails, the extension attempts confirmed rollback of the ordinary pane it created and preserves the original launch error. Unconfirmed rollback retains ownership instead of claiming cleanup succeeded. It does not close a caller-supplied surface, and managed worktree workspaces remain retained on failure. Note: the `interactive` option controls parent status notifications, not terminal focus.
+Legacy subagent tabs, panes, and worktree workspaces are created without stealing keyboard focus. Launch commands target child panes by explicit ID, so focus and command delivery are independent. If a fresh or resumed launch fails, the extension attempts confirmed rollback of the ordinary pane it created and preserves the original launch error. Unconfirmed rollback retains ownership instead of claiming cleanup succeeded. It does not close a caller-supplied surface, and managed worktree workspaces remain retained on failure. Note: the `interactive` option controls parent status notifications, not terminal focus.
+
+## The model has no `subagent` tool
+
+The routine host tools load on demand. Ask the model to call `tool_search` with
+the tool name or the task, such as `subagent`, `worktree`, or `persistent
+specialist`. If `tool_search` is missing too, Pi's tool search is unavailable,
+and the host should have activated the routine tools at session start:
+
+1. Check that the extension loaded: `/subagent list` must answer.
+2. Check the session's tool policy. A `--tools` allowlist that does not name the
+   tool, `--exclude-tools`, or a role's `deny-tools` or `spawning: false`
+   removes it. That is intended; the host never adds a tool the policy removed.
+3. Run `/reload` after changing the policy or the `extensions` setting.
+
+See [Tool loading](tools.md#tool-loading) for the full rules.
 
 ## An acquisition or dispatch is uncertain
 
 Do not repeat the launch immediately. A timed-out Herdr client does not establish
 that the server stopped creating a resource or delivering a command.
 
-1. Read the exact pane, workspace, session, and manifest identities in the error
+For Core, `spawn_failed` can mean the holder failed to acknowledge an already
+submitted program. It is not safe-retry evidence. An observed terminal ID alone
+is diagnostic, not permission to control it; only an acquired owner is eligible
+for the run's controls. If the Core identity or a terminal's launch identity
+changed, controls fail closed. Do not kill by name or guess another terminal.
+
+1. Read the exact terminal, pane, workspace, session, and manifest identities in the error
    or acknowledgement. Never choose a resource by its display label.
 2. For an acknowledgement with `status: "uncertain"`, use the existing run's
    control tools. Its acquired owner stays supervised, and fallback is disabled.
@@ -68,6 +102,32 @@ A catalog-listed model and configured authentication do not prove that your prov
 
 Removal reports each blocker, such as dirty files, a live process, or an unknown inspection. Commit the work or pass `--preserve`, stop any process in the checkout, and start the parent Pi session at the source repository or an ancestor of it. See [Explicit worktree cleanup](tools.md#explicit-worktree-cleanup) and [cleanup and recovery](worktree-subagents.md#cleanup).
 
+## A Windows child fails to start, or runs inside WSL
+
+A bare `bash` typed into a Windows pane resolves through `PATH`, where the WSL launcher (`C:\Windows\System32\bash.exe`) can outrank Git Bash. So the host runs each child's launch script through an absolute bash path, the one Pi's own bash tool uses: `shellPath` in Pi's `settings.json` (the launching session's, including its project settings only when the project is trusted; a relative path is made absolute against Pi's working directory, as Pi validates it), then Git Bash in `%ProgramFiles%` / `%ProgramFiles(x86)%`, then the first `bash.exe` on `PATH`.
+
+The pane's shell is whatever Herdr's `terminal.default_shell` starts, so the host reads it from `herdr pane process-info` (the `foreground_processes` entry whose `pid` is `shell_pid`, by `name`) and spells the line for it:
+
+| Pane shell | Line typed |
+| --- | --- |
+| `powershell.exe`, `pwsh.exe` | `& '<bash>' '<script>'` |
+| `cmd.exe` | `"<bash>" "<script>"` |
+| `bash.exe`, `sh.exe` (Git Bash) | `'<bash>' '<script>'` |
+| anything else, or no process info | `bash '<script>'`, as before |
+
+Launch fails before anything is typed in a PowerShell or cmd pane when:
+
+- **No bash resolves, or Pi's discovery returns the WSL launcher.** This happens with a per-user Git for Windows, Scoop or MSYS2 install, because Pi checks only the `Program Files` locations before taking the first `bash.exe` on `PATH`. Set `shellPath` in Pi's `settings.json` to your Git `bash.exe`, for example `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`.
+- **A `cmd.exe` pane and a path containing `"`, `%` or `!`.** `cmd.exe` expands `%VAR%` inside quotes, and `!VAR!` under delayed expansion, so the line cannot be made safe. Use a PowerShell or Git Bash pane, or a bash and temp directory without those characters.
+
+A Git Bash pane (`bash.exe`, `sh.exe`) never fails for the first reason: when no usable bash resolves it keeps the bare `bash '<script>'` line, whose `bash` is the pane's own.
+
+Project trust: a session that reports no trust decision (Pi 0.79.0 gates project settings but has no `ctx.isProjectTrusted`) is treated as untrusted, so a project's `shellPath` is ignored there. Pi 0.74 to 0.78 have no trust concept and always load it; Pi 0.79.1 and later report the decision.
+
+Unknown shells such as nushell keep the bare `bash '<script>'` line and are not protected from the WSL launcher.
+
 ## Sidebar Focus hides nothing
+
+This section is for legacy Herdr only, not Core/Desktop.
 
 Focus applies at the first agent Herdr detects after install, so launch or start an agent first. If you ran All, Focus stays off until you run Focus. Check that the parent loads a `pi-herdr-agents` release newer than `3.3.1` (older releases also need `"sidebar": { "enabled": true }` in `config.json`), that you ran `/reload` in the parent after installing or upgrading it, and that you launched the child after the reload. Run `herdr pane get <child-pane-id>`: the pane must report the child's session file as `agent_session`. If it reports none, install Herdr's Pi integration with `herdr integration install pi` in the agent directory children use, then launch new children. Read the plugin log with `herdr plugin log list --plugin pi-herdr-agents.sidebar`. See the plugin's [troubleshooting](../plugins/sidebar/README.md#troubleshooting).

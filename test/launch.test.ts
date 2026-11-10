@@ -1,3 +1,4 @@
+import "./clean-host-env.ts";
 import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -5,6 +6,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -49,8 +51,8 @@ function expectedShellQuote(value: string): string {
 }
 
 function fixture() {
-	const root = mkdtempSync(
-		join(tmpdir(), "subagent-launch-test-[probe](regex)-"),
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "subagent-launch-test-[probe](regex)-")),
 	);
 	const project = join(root, "project");
 	const agentDir = join(root, "agent");
@@ -798,6 +800,47 @@ describe("Pi launch", () => {
 				readFileSync(systemPromptPath, "utf8"),
 				"You are a focused worker.",
 			);
+		});
+	});
+
+	it("keeps Windows absolute cwd values absolute instead of joining them", async () => {
+		await withFixture(async ({ request, project }) => {
+			const windowsAbsolutes = [
+				"C:/Users/me/repo",
+				"C:\\Users\\me\\repo",
+				"\\\\server\\share\\repo",
+			];
+			for (const cwd of windowsAbsolutes) {
+				let placedCwd: string | undefined;
+				const running = await launchPiSubagent(
+					{ ...request, id: `win-cwd-${cwd.length}`, cwd },
+					{
+						createPane(_name, paneCwd) {
+							placedCwd = paneCwd;
+							return `pane-${cwd.length}`;
+						},
+						createWorktree() {
+							throw new Error("unexpected worktree creation");
+						},
+						async waitForShellReady() {},
+						runScript(_surface, _value, options) {
+							return options.scriptPath;
+						},
+						closePane() {},
+					},
+				);
+				assert.equal(
+					placedCwd,
+					cwd,
+					`Windows absolute cwd must stay absolute: ${cwd}`,
+				);
+				assert.equal(running.cwd, cwd);
+				assert.notEqual(
+					placedCwd,
+					join(project, cwd),
+					"must not join a Windows absolute cwd onto the parent cwd",
+				);
+			}
 		});
 	});
 

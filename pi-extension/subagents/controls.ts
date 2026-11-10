@@ -20,12 +20,15 @@ interface SubagentInterruptDetails {
 }
 
 export const SUBAGENT_CANCEL_DESCRIPTION =
-	"Cancel a running ordinary (non-persistent) Pi-backed subagent, including an interrupted one: " +
-	"records terminal intent first, terminates its owned process, and delivers exactly one cancelled result. " +
-	"No model fallback, retry, or recovery starts after a cancel. " +
-	"An ordinary pane is closed; a managed-worktree child stops only its Pi process and keeps the workspace, checkout, commits, and manifest. " +
+	"Cancel a running non-persistent subagent, including an interrupted one. " +
+	"The host stops its process and delivers exactly one cancelled result, with no model fallback, retry, or recovery. Do not poll for it. " +
+	"A legacy pane closes; Core confirms exit and removes its terminal record after delivery. " +
+	"A worktree child keeps the workspace, checkout, commits, and manifest. " +
 	"Returns confirmed, requested (launch still in flight), unconfirmed (the run stays live and settles by itself if its pane or process is later seen gone; call again to retry), or already-terminal. " +
-	"Persistent specialists are rejected; use subagent_stop. Do not poll: the cancelled result arrives automatically.";
+	"Persistent specialists are rejected; use subagent_stop.";
+
+export const SUBAGENT_CANCEL_SNIPPET =
+	"Cancel a running non-persistent subagent; one cancelled result arrives later";
 
 export interface SubagentCancelDetails {
 	error?: string;
@@ -47,7 +50,7 @@ function cancelStatusText(
 		case "confirmed":
 			return worktree
 				? `Cancelled subagent "${name}": its Pi process exit is confirmed; the worktree workspace, checkout, commits, and manifest are retained. ${noRetry} One cancelled result will be delivered automatically.`
-				: `Cancelled subagent "${name}": its pane was closed and Herdr confirmed it is gone. ${noRetry} One cancelled result will be delivered automatically.`;
+				: `Cancelled subagent "${name}": its owned process exit is confirmed. ${noRetry} One cancelled result will be delivered automatically.`;
 		case "requested":
 			return `Cancel recorded for subagent "${name}"; its in-flight launch is terminated as soon as it is acquired. ${noRetry} One cancelled result will be delivered after termination is confirmed.`;
 		case "unconfirmed":

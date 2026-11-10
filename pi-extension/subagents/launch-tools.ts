@@ -34,6 +34,7 @@ import {
 	HOST_PATH_CHARS,
 } from "../../maestro/core/host-text.ts";
 import type { PersistentControls } from "./persistent.ts";
+import { ROUTINE_TOOL_EXPOSURE } from "./deferred-tools.ts";
 import type { LaunchPlanner } from "./launch.ts";
 import type { SpawningConfig } from "../../maestro/core/config/spawning-config.ts";
 import {
@@ -121,29 +122,18 @@ export function registerSubagentTool(
 	if (shouldRegister("subagent"))
 		pi.registerTool({
 			name: "subagent",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Subagent",
 			description:
-				"Spawn a sub-agent in a dedicated terminal herdr pane, or in an isolated Herdr-managed Git worktree when worktree is provided. " +
-				"Use ordinary panes for read-only tasks; a single or sequential writer can work in the parent checkout without a worktree. " +
-				"Reserve unique worktree branches for parallel independent writers starting from committed state — the worktree base is committed HEAD, so uncommitted parent changes are not copied. " +
-				"Worktree runs retain their workspace after completion for parent review; they are not pushed, merged, or removed automatically. " +
-				"To inspect a retained worktree result, spawn read-only agents in an ordinary pane with cwd set to that worktree path — do not create a new worktree for them. " +
-				"This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-				"When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-				"DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-				"DO NOT fabricate, assume, or summarize results after calling this tool. " +
-				"After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
+				"Launch a Pi subagent in a legacy Herdr pane or local Core terminal. " +
+				"Managed worktrees require legacy Herdr; Core runs in the background without Desktop Agents tabs or sidebar integration. " +
+				"Use an ordinary child for read-only work and a single writer, and worktrees only for parallel writers. " +
+				"A worktree starts from the committed HEAD, without uncommitted parent changes, and is retained after the run for parent review. " +
+				"To inspect one, use an ordinary child with cwd set to its path. " +
+				"The call returns at once and the result arrives later as a new message. " +
+				"Do not poll or guess the result; end the turn or do other independent work.",
 			promptSnippet:
-				"Spawn a sub-agent in a dedicated terminal herdr pane, or in an isolated Herdr-managed Git worktree when worktree is provided. " +
-				"Use ordinary panes for read-only tasks; a single or sequential writer can work in the parent checkout without a worktree. " +
-				"Reserve unique worktree branches for parallel independent writers starting from committed state — the worktree base is committed HEAD, so uncommitted parent changes are not copied. " +
-				"Worktree runs retain their workspace after completion for parent review; they are not pushed, merged, or removed automatically. " +
-				"To inspect a retained worktree result, spawn read-only agents in an ordinary pane with cwd set to that worktree path — do not create a new worktree for them. " +
-				"This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-				"When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-				"DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-				"DO NOT fabricate, assume, or summarize results after calling this tool. " +
-				"After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
+				"Launch a Pi subagent in Herdr or Core; its result arrives later as a new message",
 			promptGuidelines: subagentRoutingGuidelines,
 			parameters: SubagentParams,
 
@@ -435,42 +425,34 @@ export function registerResumeTool(
 	if (shouldRegister("subagent_resume"))
 		pi.registerTool({
 			name: "subagent_resume",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Resume Subagent",
 			description:
-				"Resume a previous Pi-backed sub-agent session in a new herdr pane. " +
-				"This does not reattach a retained managed worktree; continue worktree-bound follow-up in its existing workspace. " +
-				"This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-				"When the resumed sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-				"DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT poll for status. All of that is wasted work — the harness handles delivery for you. " +
-				"DO NOT fabricate or assume results. After resuming, either end your turn or work on other independent tasks; the harness will wake you when the result is ready. " +
-				"Use when a sub-agent was cancelled or needs follow-up work.",
+				"Resume a saved subagent session in a new legacy Herdr pane or local Core terminal. " +
+				"Use it to continue a cancelled run or send follow-up work. " +
+				"It does not reattach a retained worktree; continue that work in the existing workspace. " +
+				"The call returns at once and the result arrives later as a message. Do not poll for it.",
 			promptSnippet:
-				"Resume a previous Pi-backed sub-agent session in a new herdr pane. " +
-				"This does not reattach a retained managed worktree; continue worktree-bound follow-up in its existing workspace. " +
-				"This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-				"When the resumed sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-				"DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT poll for status. All of that is wasted work — the harness handles delivery for you. " +
-				"DO NOT fabricate or assume results. After resuming, either end your turn or work on other independent tasks; the harness will wake you when the result is ready. " +
-				"Use when a sub-agent was cancelled or needs follow-up work.",
+				"Resume a saved subagent in Herdr or Core; its result arrives later as a new message",
 			parameters: Type.Object({
 				sessionPath: Type.String({
 					description: "Path to the session .jsonl file to resume",
 				}),
 				name: Type.Optional(
 					Type.String({
-						description: "Display name for the terminal tab. Default: 'Resume'",
+						description:
+							"Display name for the run (and legacy Herdr tab). Default: 'Resume'",
 					}),
 				),
 				message: Type.Optional(
 					Type.String({
-						description:
-							"Optional message to send after resuming (e.g. follow-up instructions)",
+						description: "Message to send after resuming.",
 					}),
 				),
 				autoExit: Type.Optional(
 					Type.Boolean({
 						description:
-							"Whether the resumed session should automatically exit after completing its response. Defaults to true for autonomous follow-up work; set false for interactive resumed sessions.",
+							"Exit after the response. Defaults to true; set false to leave the session open for the user.",
 					}),
 				),
 			}),

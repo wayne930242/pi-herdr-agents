@@ -4,6 +4,7 @@
  * it stops its parent's launch work before it scans, and it owns its foreign
  * canary on the same terms.
  */
+import "../clean-host-env.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -13,6 +14,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -492,7 +494,7 @@ describe("sidebar fixture foreign canary", () => {
 			repos: () => string[];
 		}) => Promise<void>,
 	): Promise<void> {
-		const tmp = mkdtempSync(join(tmpdir(), "pi-sidebar-canary-"));
+		const tmp = realpathSync(mkdtempSync(join(tmpdir(), "pi-sidebar-canary-")));
 		const { fake, commands } = fakeHerdr(tmp);
 		try {
 			await run({

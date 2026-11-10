@@ -4,7 +4,7 @@ These instructions apply to humans and coding agents changing `pi-herdr-agents`.
 
 ## What this package is
 
-`pi-herdr-agents` (Pi Herdr Agents) is a Pi extension that launches asynchronous Pi child agents exclusively in Herdr. Ordinary runs group child panes in extension-owned `Agents` tabs by default. Writing tasks may opt into one isolated Herdr-managed Git worktree per branch. Legacy role definitions that request an external CLI fail before Herdr creates resources.
+`pi-herdr-agents` (Pi Herdr Agents) is a Pi extension that launches asynchronous Pi child agents exclusively in Herdr. Legacy Herdr runs group child panes in extension-owned `Agents` tabs by default. Local Herdr Core supports ordinary native execution; Desktop placement/sidebar parity and Core managed worktrees remain unsupported ([ADR-0018](docs/adr/0018-herdr-core-execution.md)). Writing tasks may opt into one isolated Herdr-managed Git worktree per branch. Legacy role definitions that request an external CLI fail before Herdr creates resources.
 
 The package is a pack-neutral execution host: it ships no agent roles and no planning or review workflows. Its only skill is `pi-herdr-agents`, a general operating guide for the host; do not add methodology or workflow skills here. Roles come from project or global definitions and separately installed role packs. Do not add bundled roles, a privileged default pack, or name-keyed workflow behavior; see [ADR-0013](docs/adr/0013-pack-neutral-execution-host.md).
 
@@ -28,13 +28,16 @@ Former bundled roles, `/plan`, its plan skill, and `/skill:orchestrate` now belo
 - `pi-extension/subagents/index.ts` — Pi composition root: loads config, adopts the reload-surviving runtime, builds the per-load controllers, and registers session handlers, tools, commands, and renderers in order; also the `__test__` surface
 - `pi-extension/subagents/state.ts`, `catalog.ts`, `presentation.ts` — run-state types and reload slots; role catalog, `subagent` parameters, and launch policy; the parent message model, its one serializer, and the child-report envelope
 - `pi-extension/subagents/tool-boundary.ts` — the one registration boundary that encodes errors thrown by any host tool or command
+- `pi-extension/subagents/deferred-tools.ts` — `deferred` exposure for the routine host tools: records which tools this load registered, recognizes Pi's built-in `tool_search` by its reported source, and at `session_start` activates that search or, without it, the routine tools Pi kept
 - `pi-extension/subagents/observation.ts`, `widgets.ts`, `controls.ts`, `persistent.ts`, `delivery.ts`, `launch.ts` — per-load controllers (`create*`) for activity observation, the widget and status refresh, interrupt/cancel, persistent specialists, parent delivery, and launch plans
 - `pi-extension/subagents/launch-tools.ts`, `control-tools.ts`, `worktree-tools.ts`, `task-models.ts`, `renderers.ts` — `register*` functions for the public tools, commands, and message renderers
 - `pi-extension/subagents/model-registry.ts`, `config-path.ts` — permanent host-local SDK capability glue and configuration-path conventions
 - `maestro/core/` — seam interfaces and types; activity/lifecycle/status projection, routing, wake-ups, and supervision; `undelivered-children.ts` names the process-local registry slot and tells the child protocol whether launched children still owe a delivery
 - `plugins/sidebar/` — optional standalone Node companion Herdr plugin; it imports nothing from the extension
 - `maestro/core/roles/discovery.ts`, `maestro/core/config/` — role parsing/discovery, injected-directory config loaders, and task-model init prompt construction
+- `maestro/core/config/herdr-config.ts`, `maestro/runtime/herdr-backend.ts` — strict backend selection and explicit legacy/Core composition; the run owner pins its Core endpoint and parent terminal across reload
 - `maestro/core/worktree.ts`, `worktree-cleanup.ts` — manifest schema/state, handoff types, and cleanup eligibility/formatting
+- `maestro/core/realpath-without-opening.ts` — lstat/stat/readlink realpath used by cleanup and Herdr checkout comparisons so Bun never `open()`s a path that can freeze Pi
 - `maestro/core/git-environment.ts` owns repository-local environment isolation for host-managed Git commands while preserving user configuration, identity, and hooks.
 - `maestro/core/deadline.ts` owns finite monotonic budgets for asynchronous launch, readiness, and handoff effects. Herdr subprocesses stay in `surfaces/herdr/herdr-cli.ts`; Git handoff subprocesses stay in `runtime/worktree-operations.ts`.
 - `maestro/core/host-text.ts` — the one encoding for variable values in parent-facing host lines, lossless command-argument serializers, and display normalization for child text
@@ -42,7 +45,9 @@ Former bundled roles, `/plan`, its plan skill, and `/skill:orchestrate` now belo
 - `maestro/core/declared-skills.ts`, `maestro/adapters/pi/child/declared-skills.ts` — declared skill names (validated by the parent, passed in `PI_SUBAGENT_SKILLS`) and the child's first-run injection of the skills its own Pi loaded, with bounded reads
 - `maestro/adapters/pi/child/subagent-done.ts` — child protocol: `caller_ping`, `subagent_done`, and activity recording
 - `maestro/core/accept.ts`, `maestro/adapters/pi/accept-runner.ts`, `maestro/adapters/pi/accept-groups.ts`, `maestro/adapters/pi/child/accept-check.ts`, `maestro/runtime/accept-recheck.ts` — the accept check ([ADR-0017](docs/adr/0017-accept-check.md)): spec validation, the closed verdict set and the outcome-ledger line; the `sh -c` runner with timeout and process-group kill; the process-wide registry of running check groups that owners terminate at shutdown, with its `exit` hook; the child's `agent_before_settle` retry loop; and the parent re-check that `finalize` runs and the outcome-ledger append
+- `maestro/core/script-launch.ts`, `maestro/adapters/pi/script-shell.ts` — the Windows launch line: the pure builder spells an absolute bash call for the pane's shell (PowerShell, cmd, Git Bash; unknown shells keep the bare `bash` line), and the only SDK-importing resolver finds that bash from Pi's `shellPath` for the launching session's cwd and project trust (`PiLaunchSnapshot.scriptShell`); `surfaces/herdr/terminal.ts` reads the pane shell from `pane process-info`
 - `maestro/surfaces/herdr/` — `HerdrSurfaceProvider`, Herdr CLI driver (`herdr-cli.ts` exec, `herdr-pane.ts` pane inspection and readiness, `herdr.ts` placement, worktrees and pane commands), and terminal scripts, plus `herdr-socket.ts` for socket pane metadata
+- `maestro/surfaces/herdr/herdr-core-protocol.ts`, `herdr-core-surface-provider.ts` — bounded native Core RPC, atomic-start uncertainty, per-launch ownership, confirmed termination and delivery-gated record removal; no Desktop layout or worktree operations
 - `maestro/runtime/` — `RunSession`, Pi composition, run ownership, controls/retries, observation, delivery-gated cleanup, worktree operations/handoff, and task-model init composition, plus `delegated-marker.ts` for delegated-child sidebar markers; `pi-run-session.ts` composes the Pi run session, `pi-run-session-types.ts` holds its public contract types, and `pi-persistent-io.ts` its persistent-specialist inbox and ledger I/O
 - `maestro/adapters/fake/`, `maestro/surfaces/fake/`, `test/maestro/` — conformance fakes, seam tests, and the dependency-rule test
 - `CONTEXT.md` — orchestration-domain glossary
@@ -121,6 +126,11 @@ git diff --check
 
 `npm run typecheck` type-checks production sources (`pi-extension/`, `maestro/`, `scripts/`), the TypeScript tests (`test/**/*.ts`), and the verification lab scripts (`.pi/skills/**/*.ts`) under `strict`. Tests run with type stripping, so a type error never fails `npm test`; fix it for the typecheck gate. JavaScript tests (`*.js`, `*.mjs`) are not covered.
 
+The **CI** workflow also has a non-blocking **Unit tests (Windows, non-blocking)**
+job on `windows-latest`. After dependency installation, it runs only `npm test`.
+It is allowed to fail and must not be cited as passing verification evidence
+while that policy remains in place.
+
 For Herdr or lifecycle changes, run the deterministic suite from inside Herdr. Run only one integration suite at a time on a Herdr instance; concurrent suites compete for terminal focus and process capacity and can cause false timeouts or leaked test resources.
 
 When a test reports that a `pi-integ-*` worktree path already exists, first check whether the same test already created that worktree and the deterministic provider dispatched the tool twice after asynchronous completion. Deterministic providers must make each requested tool call one-shot after its started result appears. Remove only verified test-owned residue after confirming that no workspace or process owns it.
@@ -128,6 +138,20 @@ When a test reports that a `pi-integ-*` worktree path already exists, first chec
 ```bash
 npm run test:integration
 ```
+
+The separate `.github/workflows/linux-integration.yml` runs the complete
+credential-free deterministic suite on Ubuntu with checksum-pinned Herdr binaries.
+`scripts/run-linux-integration.ts` reuses the private verification lab and verifies
+one real-parent delegation first. Check its result separately from the static/unit
+**CI** workflow; neither publishes. Evidence is retained for seven days.
+Desktop GUI coverage is deferred. See `docs/development.md`.
+
+Core lifecycle changes additionally require `npm run test:integration:core`. It
+starts independent private servers and real parent Pi sessions via
+`test/integration/herdr-core-lab.ts` and `core-parent.ts`, without using the
+operator's Core/Desktop. Missing binaries cause explicit skips, never passing
+evidence. The older verification lab uses Linux `/proc`; report that gate as
+unavailable on macOS rather than treating the Core suite as a substitute.
 
 Use `PI_TEST_MODEL="openai-codex/gpt-5.6-luna" PI_TEST_TIMEOUT=180000 npm run test:integration:live` only for optional provider-compatibility smoke coverage. Do not use skipped Herdr tests as passing evidence.
 

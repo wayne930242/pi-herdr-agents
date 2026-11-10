@@ -1,4 +1,3 @@
-import { realpathSync } from "node:fs";
 import { resolve, relative, isAbsolute, sep } from "node:path";
 import {
 	isBoolean,
@@ -7,6 +6,7 @@ import {
 	isPlainObject,
 	isString,
 } from "../../core/config/type-guards.ts";
+import { Deadline } from "../../core/deadline.ts";
 import {
 	isCompletePrimaryWorkspaceClaim,
 	rememberOpenedPrimaryWorkspace,
@@ -14,6 +14,7 @@ import {
 	type PrimaryWorkspaceClaim,
 	type ReleasedPrimaryWorkspaceClaim,
 } from "../../core/opened-primary-workspace.ts";
+import { realpathWithoutOpening } from "../../core/realpath-without-opening.ts";
 import {
 	AcquisitionUncertainError,
 	isAcquisitionUncertainError,
@@ -22,7 +23,6 @@ import {
 	type RecoveredWorktreeProvisioning,
 	type UncertainAcquisition,
 } from "../../core/surface-provider.ts";
-import { Deadline } from "../../core/deadline.ts";
 import {
 	herdrExec,
 	herdrExecAsync,
@@ -346,7 +346,7 @@ function withPlacement<T>(
 
 function canonicalPath(path: string): string {
 	try {
-		return realpathSync(path);
+		return realpathWithoutOpening(path);
 	} catch {
 		return resolve(path);
 	}
@@ -972,7 +972,7 @@ function otherWorkspaceIsOpen(listing: string, primaryId: string): boolean {
 function sameCheckoutPath(left: string, right: string): boolean {
 	if (left === right) return true;
 	try {
-		return realpathSync(left) === realpathSync(right);
+		return realpathWithoutOpening(left) === realpathWithoutOpening(right);
 	} catch {
 		return false;
 	}
@@ -1238,4 +1238,6 @@ export const __herdrTest__ = {
 	parsePaneProcessInfo,
 	isHerdrShellReady,
 	withMockHerdrExec,
+	canonicalPath,
+	sameCheckoutPath,
 };

@@ -1,4 +1,5 @@
 import { HostEncodedError } from "./tool-boundary.ts";
+import { ROUTINE_TOOL_EXPOSURE } from "./deferred-tools.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -48,9 +49,10 @@ export function registerWorktreeTools(
 	if (parentSession) {
 		pi.registerTool({
 			name: "worktree_list",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Worktree inventory",
 			description:
-				"Inspect managed worktrees, including cross-session orphans. Only source repositories inside cwd are eligible for explicit removal. This tool never removes anything.",
+				"List managed worktrees, including orphans from other sessions. Read-only.",
 			parameters: Type.Object({}),
 			execute: async (_id, _params, _signal, _update, ctx) => {
 				const entries = await listContainedWorktrees(cleanupInput(ctx));
@@ -62,9 +64,10 @@ export function registerWorktreeTools(
 		});
 		pi.registerTool({
 			name: "worktree_remove",
+			exposure: ROUTINE_TOOL_EXPOSURE,
 			label: "Remove worktree",
 			description:
-				"Explicitly remove one managed worktree by exact path, branch, or workspace ID. Rechecks cwd containment, live children/leases, and Git state. Branches and commits are retained. Dirty work requires explicit preserve: true to make a WIP commit first.",
+				"Remove one managed worktree by exact path, branch, or workspace ID, only when the user asks. Its source repository must be inside cwd. Branches and commits are kept. A dirty worktree needs preserve: true, which commits the work first.",
 			parameters: Type.Object({
 				target: Type.String({ minLength: 1 }),
 				preserve: Type.Optional(Type.Boolean()),

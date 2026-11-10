@@ -13,16 +13,16 @@ This page is the detailed reference for the tools, commands, and run lifecycle o
 
 | Tool | Sessions | Description |
 | --- | --- | --- |
-| `subagent` | parent, child | Spawn a sub-agent in a dedicated terminal herdr pane, or in an isolated Herdr-managed Git worktree when worktree is provided. |
-| `subagent_cancel` | parent, child | Cancel a running ordinary (non-persistent) Pi-backed subagent, including an interrupted one: records terminal intent first, terminates its owned process, and delivers exactly one cancelled result. |
-| `subagent_interrupt` | parent, child | Send Escape to the active turn of a currently running Pi-backed subagent. |
-| `subagent_resume` | parent, child | Resume a previous Pi-backed sub-agent session in a new herdr pane. |
+| `subagent` | parent, child | Launch a Pi subagent in a legacy Herdr pane or local Core terminal. |
+| `subagent_cancel` | parent, child | Cancel a running non-persistent subagent, including an interrupted one. |
+| `subagent_interrupt` | parent, child | Send Escape to a running subagent's active turn. |
+| `subagent_resume` | parent, child | Resume a saved subagent session in a new legacy Herdr pane or local Core terminal. |
 | `subagent_send` | parent, child | Deliver one follow-up task to an idle persistent specialist. |
-| `subagent_stop` | parent, child | Gracefully stop a persistent specialist after its active task settles. |
-| `subagents_list` | parent, child | List all available package, global, and project subagent definitions. |
+| `subagent_stop` | parent, child | Stop a persistent specialist after its active task finishes. |
+| `subagents_list` | parent, child | List subagent role definitions, live persistent specialists, and the supervision mode. |
 | `subagents_write_task_models` | parent only | Validate and atomically replace models.tasks and models.tasksMeta in the durable Pi agent config, preserving unrelated settings. |
-| `worktree_list` | parent only | Inspect managed worktrees, including cross-session orphans. |
-| `worktree_remove` | parent only | Explicitly remove one managed worktree by exact path, branch, or workspace ID. |
+| `worktree_list` | parent only | List managed worktrees, including orphans from other sessions. |
+| `worktree_remove` | parent only | Remove one managed worktree by exact path, branch, or workspace ID, only when the user asks. |
 <!-- generated:tools:end -->
 
 | Skill | Description |
@@ -48,11 +48,48 @@ This page is the detailed reference for the tools, commands, and run lifecycle o
 | `/worktree` | `/worktree <name> [task]`<br>`/worktree list`<br>`/worktree remove <target>` | Fork into a worktree, list retained worktrees, or explicitly remove one |
 <!-- generated:commands:end -->
 
+## Execution backends
+
+Ordinary launches use legacy Herdr panes or local Core terminals, selected by
+[`herdr.backend`](configuration.md#herdr-backend). Public request parameters and
+Pi result envelopes are unchanged. Managed worktree launch, handoff, inventory
+and removal require legacy Herdr; Core rejects them before acquiring resources.
+An ordinary Core child may use an existing checkout as `cwd`.
+
+Core starts programs atomically in the background, with no Desktop placement or
+legacy sidebar markers. Agent status such as `done` is not process-exit evidence.
+Pi sidecars supply semantic results, while native `finished`/confirmed absence
+proves lifetime exit. Persistent task results do not release the process.
+Interrupt sends Escape to the exact owned terminal and leaves it open; cancel
+confirms native exit before delivering its result. Record removal is a separate,
+delivery-gated step. A Core error after start submission, including `spawn_failed`,
+is conservative acquisition uncertainty, not permission to retry.
+
+Reload preserves the selected endpoint and owner. Changing backend or Core
+endpoint requires restarting Pi. Core's native child tree is not acceptance of
+Desktop Agents tabs/sidebar visual parity; that presentation is not implemented.
+
+## Tool loading
+
+The nine routine tools (`subagent`, `subagent_resume`, `subagent_interrupt`, `subagent_cancel`, `subagent_send`, `subagent_stop`, `subagents_list`, `worktree_list`, and `worktree_remove`) register with Pi's `deferred` [tool exposure](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure). Their schemas stay out of model requests until Pi's built-in `tool_search` loads them. The same applies to the `subagent` guidelines, which include the [model catalog](configuration.md#model-catalog-in-the-prompt). When a session starts, the host activates `tool_search` and leaves every other active or restored tool as it was. A search such as `tool_search({ query: "subagent" })` or `tool_search({ query: "worktree" })` declares the matching tools for the next model call. Pi records loaded tools in the transcript, so they stay declared after `/reload`, and after a resume on that branch.
+
+Pi's tool policy decides which host tools exist, and the host never adds a tool the policy removed:
+
+- A `--tools` allowlist keeps only the tools it names. Pi declares the named host tools at once, and `tool_search` can load only tools the allowlist kept.
+- `--exclude-tools`, and in a child the role's `deny-tools` or `spawning: false`, remove tools from the session. Search cannot load a removed tool.
+- When Pi's own `tool_search` is unavailable or turned off, the host activates every routine tool Pi kept when the session starts, as earlier releases did. This happens with `--no-extensions`, with `-builtin:tool-search` in the `extensions` setting, with `"-tool_search"` in the `defaultTools` setting, with `--exclude-tools tool_search`, with an allowlist that omits `tool_search`, and when another extension registers a tool named `tool_search`. An SDK session uses search only when it loads the tool-search extension as the built-in `builtin:tool-search`; see [Pi's SDK documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md).
+- Pi does not report the per-invocation `--tools -tool_search` to extensions, so the host still activates search under it. Use `--exclude-tools tool_search` to turn search off for one run.
+- The host recognizes Pi's search by the source Pi reports for it (`builtin:tool-search`), never by name alone, and activates only tools it registered itself.
+
+Codemode scripts can call registered `deferred` tools without loading them, as Pi allows for every deferred tool. The removal rules above still decide which host tools are registered.
+
+`subagents_write_task_models` is not deferred. It is a direct tool registered inactive, `tool_search` never finds it, and only `/subagents-init` activates it; see [Task-model writer](configuration.md#task-model-writer). The child-only `caller_ping` and `subagent_done` tools are declared directly, as before.
+
 ## Async Subagent Flow
 
 ```
 1. Agent calls subagent()          → acknowledges acquisition, not task completion
-2. Sub-agent runs in herdr pane    → widget shows live status
+2. Child runs in a pane/terminal  → widget shows live status
 3. User keeps chatting             → main session fully interactive
 4. Sub-agent finishes              → result steered back as a normal completion/failure
 5. Main agent processes result     → continues with new context
@@ -78,7 +115,7 @@ Completion messages render with a colored background and are expandable with `Ct
 
 The widget projects each sub-agent from a **process + turn lifecycle**:
 
-- **Herdr pane inspection** is the coarse authority for whether the child process is present and whether Herdr reports it as idle, working, blocked, or done.
+- **Legacy Herdr pane inspection** is the coarse authority for whether the child process is present and whether Herdr reports it as idle, working, blocked, or done. Core uses native execution inspection for lifetime and Pi activity for turn detail; reported agent status is not exit evidence.
 - **Child activity snapshots** enrich the label with Pi-only detail (tool name, streaming, etc.) when available.
 - Session JSONL is still used for transcript, resume, lineage, and result extraction — not for liveness.
 
@@ -101,7 +138,7 @@ The widget header counts **active** vs **open**:
 
 When `activeCount === 0` (every tracked row is open), the border uses an amber accent. Process elapsed time (`MM:SS` on the left) freezes when the process reaches finalizing/completed/failed. Interrupt does **not** freeze that process clock; the interrupted state shows its own duration on the right while the process remains open.
 
-A fixed internal watchdog marks a run as `stalled` when pane inspection fails or the pane disappears without a completion sidecar; valid long-running `active` or `waiting` states do not become `stalled` just because time passes. When a run enters `stalled` or recovers from it, the parent agent receives a steer message so it can react. All other status transitions stay in the widget only.
+A fixed internal watchdog marks a run as `stalled` when pane inspection fails or the pane disappears without a completion sidecar; valid long-running `active` or `waiting` states do not become `stalled` just because time passes. On Core, unavailable native-execution inspection feeds the same watchdog; a verified live execution clears the inspection failure. When a run enters `stalled` or recovers from it, the parent agent receives a steer message so it can react. All other status transitions stay in the widget only.
 
 **Interactive subagents stay silent.** Long-running user-driven subagents (for example, an interactive planning role or a bare `interactive: true` fork) do not wake the parent session on `stalled`/`recovered` transitions — the user is working directly in the subagent's pane, and a steer message there would just burn an orchestrator turn on a no-op "still waiting" ping. The widget still updates normally, and activity snapshots are still recorded/classified regardless of the `interactive` setting. By default, agents with `auto-exit: true` are treated as autonomous and get stall pings; agents without it are treated as interactive and stay quiet. Override per-agent with `interactive: true|false` in frontmatter, or per-spawn with `interactive: true|false` on the tool call.
 
@@ -151,27 +188,27 @@ subagent({
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `name` | string | yes | Short stable label for the subagent; for a new coordinated group use \<task>-\<role>[-n] (shown in the widget and pane title) |
+| `name` | string | yes | Short label shown in the widget and legacy pane title. |
 | `task` | string | yes | Task/prompt for the sub-agent |
-| `agent` | string | no | Role definition name to load defaults from. Discovery precedence is project .pi/agents, global ~/.pi/agent/agents, then installed role packs; this extension ships no roles. A missing name fails before launch. Omit for a bare agent. |
+| `agent` | string | no | Role definition to load defaults from (see subagents_list). Omit for a bare agent. |
 | `systemPrompt` | string | no | Role/system-prompt text for a bare spawn. Named agents keep their definition body. |
-| `model` | string | no | Explicitly pick an exact authenticated provider/model-id, an ordered comma-separated fallback list, or task:\<category> as the entire value. task: categories are case-insensitive and expand configured authenticated candidates; worktrees use only the first. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. Fallback lists cannot be used with worktrees. |
-| `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | no | Pi thinking level. Pick the model tier first, then set thinking within that model's range: minimal/low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, or hard diagnosis. Omitting uses the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead. |
+| `model` | string | no | Exact authenticated provider/model-id, a comma-separated fallback list, or task:\<category> as the whole value. Worktree launches take one model: a task: category uses its first candidate, and fallback lists are rejected. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. |
+| `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | no | Pi thinking level, within the chosen model's supported range. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead. |
 | `solutionSpace` | string | no | One or two sentences on how open-ended the work is, not the work itself: whether the fix or design is given, or which causes or designs remain open. The child receives it as PI_SUBAGENT_SOLUTION_SPACE, where an installed extension can choose the child's thinking level from it. |
 | `skills` | string | no | Comma-separated skills (overrides agent default) |
 | `tools` | string | no | Comma-separated tools (overrides agent default) |
-| `cwd` | string | no | Working directory for the sub-agent. Without worktree, the agent starts in this folder. With worktree, this selects the source Git repository and the agent starts at the created worktree root. |
-| `worktree` | object \| null | no | Optional isolated Herdr-managed Git worktree. Omit or pass null to use an ordinary pane in cwd. |
-| `worktree.branch` | string | yes | New branch name for an isolated Herdr-managed Git worktree |
-| `worktree.base` | string | no | Git revision to branch from. Defaults to the source checkout's committed HEAD. |
-| `fork` | boolean | no | Override the child session mode for this spawn. `true` forces full-context fork; `false` forces standalone. Omit to inherit the agent frontmatter session-mode. |
-| `persistent` | boolean | no | Keep this stable specialist session alive between turn-based tasks. Persistent agents accept follow-up work only through subagent_send. |
-| `accept` | object | no | Optional accept check. The delivery carries `Check: \<verdict>` from the closed set accepted, rejected, error, skipped, none. Only auto-exit, non-persistent children support it. |
-| `accept.run` | string | yes | Shell command run with `sh -c`. Exit 0 passes. The child runs it before it finishes and retries on failure; then the host re-runs it in the child's checkout (the worktree for worktree children) and that run decides the verdict. |
-| `accept.maxRetries` | integer | no | Extra child turns after a failed check, each with the failing output. Default 1. |
-| `accept.timeoutSec` | integer | no | Per-run timeout in seconds. Default 600. A timeout is verdict `error`. |
-| `accept.paths` | string[] | no | Repo-relative check files (for example tests). The delivery reports any the child changed; the verdict is unchanged. |
-| `interactive` | boolean | no | Mark the subagent as interactive (long-running, user drives the conversation in its own pane). When true, the main session is not woken by status transitions (stalled/recovered) for this subagent. If omitted, falls back to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit` (agents that auto-exit are autonomous and get stall pings; agents that don't are interactive and stay quiet). |
+| `cwd` | string | no | Working directory. With `worktree`, the source repository; the child then starts at the new worktree root. |
+| `worktree` | object \| null | no | New managed Git worktree (legacy Herdr only, not Core). Omit or pass null for an ordinary child in cwd. |
+| `worktree.branch` | string | yes | Unique new branch name. |
+| `worktree.base` | string | no | Git revision to branch from. Defaults to the committed HEAD. |
+| `fork` | boolean | no | `true` copies this conversation into the child; `false` starts it fresh. Omit to use the role's session-mode. |
+| `persistent` | boolean | no | Keep the child alive between tasks. Send later tasks with subagent_send. |
+| `accept` | object | no | Optional acceptance check. The result reports `Check: \<verdict>`: accepted, rejected, error, skipped, or none. Only for auto-exit, non-persistent children. |
+| `accept.run` | string | yes | Shell command run with `sh -c`; exit 0 passes. The child runs it and retries on failure. The host then reruns it in the child's checkout, and that run decides the verdict. |
+| `accept.maxRetries` | integer | no | Extra child turns after a failed check. Default 1. |
+| `accept.timeoutSec` | integer | no | Per-run timeout in seconds. Default 600. A timeout gives verdict `error`. |
+| `accept.paths` | string[] | no | Check files, such as tests. The result lists any the child changed, without affecting the verdict. |
+| `interactive` | boolean | no | True when the user drives the child in its own pane. Interactive children do not wake the parent on stall or recovery. Defaults to the role's `interactive` setting, else the opposite of `auto-exit`. |
 <!-- generated:subagent-params:end -->
 
 Defaults and behavior the schema does not carry:
@@ -313,9 +350,11 @@ Each model attempt also appends one line to the [outcome ledger](configuration.m
 
 Set `persistent: true` on a `subagent` launch to create one logical specialist with one v1 session generation. Its resolved tools, denied tools, model, thinking level, and optional worktree binding are snapshotted at launch and do not change when work is sent later. `subagents_list` shows each live specialist's logical ID, generation ID, state, completed-task count, and effective policy.
 
-The initial task and each `subagent_send({ id|name, message })` task are dispatched with a task ID. Parent-owned in-process bookkeeping prevents a successful task-result or help notification from being sent again when its ledger acknowledgment fails; the acknowledgment alone is retried, including across `/reload`. This bookkeeping does not survive a full process crash and is not a durable exactly-once messaging guarantee. A specialist accepts one task at a time. Sends while it is working are recorded as `rejected-busy`; no queue is retained. After a task result arrives, it is idle and accepts the next task while its process remains open. Once process exit is observed, sends and stop requests are rejected even while the final Git handoff is pending. A persistent child's `caller_ping` records a help request but keeps the session alive; answer with `subagent_send`.
+The initial task and each `subagent_send({ id|name, message })` task are dispatched with a task ID. Parent-owned in-process bookkeeping prevents a successful task-result or help notification from being sent again when its ledger acknowledgment fails; the acknowledgment alone is retried, including across `/reload`. This bookkeeping does not survive a full process crash and is not a durable exactly-once messaging guarantee. A specialist accepts one task at a time. Sends while it is working are recorded as `rejected-busy`; no queue is retained. After a task result arrives, it is idle and accepts the next task while its process remains open. Once process exit is observed, sends and stop requests are rejected even while the final Git handoff is pending. A persistent child's `caller_ping` ends its current task with a help request and keeps the session alive. Answer with `subagent_send`: the answer starts a new task, which the child takes up after the run that asked for help finishes.
 
-Use `subagent_stop({ id|name })` to request graceful shutdown. If a task is active, stop becomes `stop-pending` and the task reaches its terminal outcome first. An uncertain launch's initial task does not hold stop pending. Its bounded exit wait starts immediately. The parent reports `stopped` only after process-exit evidence is confirmed, then closes an ordinary pane it created and releases the name. If confirmation times out, the specialist is `stalled` in an unconfirmed-stop state: `subagent_send` rejects follow-up work while retaining evidence. If publishing the stop directive fails, it likewise enters a retryable failed-stop state rather than remaining permanently stop-pending. Request `subagent_stop` again to publish another directive and make another bounded exit check, or spawn a new specialist. Timeout notices belong to one stop attempt and wait for a live parent API across reload and session-replacement gaps. Notification failures are contained and retried. A new stop attempt, verified process exit, or quitting cancels the old notice, including pending evidence reads and retry timers. If exit is confirmed after a stop timeout or publication failure, the parent receives one terminal stopped update and a stopped ledger entry. A pane or process disappearance without a stop directive produces one facts-only crash notice; persistent sessions cannot be resumed in v1, so spawn a new specialist. There is no automatic restart, replay, or revival.
+The child's activity file follows the current task. `subagent_done` or `caller_ping` writes `phase: "done"` for that task and freezes the file against the trailing events of the same run; when the next `subagent_send` task starts, the child records `latestEvent: "input"` with `phase: "active"` and then reflects the task's turns and tools, ending in `done` again. The file schema is unchanged and `sequence` keeps increasing across tasks. A non-persistent child's `done` snapshot stays final.
+
+Use `subagent_stop({ id|name })` to request graceful shutdown. If a task is active, stop becomes `stop-pending` and the task reaches its terminal outcome first. A stop that arrives after the task ended, for example after a help request, aborts the child's leftover run. An uncertain launch's initial task does not hold stop pending. Its bounded exit wait starts immediately. The parent reports `stopped` only after process-exit evidence is confirmed, then closes an ordinary pane it created and releases the name. If confirmation times out, the specialist is `stalled` in an unconfirmed-stop state: `subagent_send` rejects follow-up work while retaining evidence. If publishing the stop directive fails, it likewise enters a retryable failed-stop state rather than remaining permanently stop-pending. Request `subagent_stop` again to publish another directive and make another bounded exit check, or spawn a new specialist. Timeout notices belong to one stop attempt and wait for a live parent API across reload and session-replacement gaps. Notification failures are contained and retried. A new stop attempt, verified process exit, or quitting cancels the old notice, including pending evidence reads and retry timers. If exit is confirmed after a stop timeout or publication failure, the parent receives one terminal stopped update and a stopped ledger entry. A pane or process disappearance without a stop directive produces one facts-only crash notice; persistent sessions cannot be resumed in v1, so spawn a new specialist. There is no automatic restart, replay, or revival.
 
 A persistent completion sidecar records the child's intended outcome before
 shutdown. It does not prove process exit. The host retains lifetime ownership
@@ -354,7 +393,7 @@ subagent_cancel({ name: "Scout" });
 
 Target resolution matches `subagent_interrupt`: an exact running ID or an exact, unambiguous display name. Persistent specialists are rejected; use `subagent_stop`, whose graceful v1 semantics are unchanged.
 
-The cancel intent is recorded before anything is aborted or killed. From then on the run never advances its model shortlist or starts another execution attempt, even when terminating the pane makes the watcher observe a lost pane, and even when a fallback launch was already in flight. The result reports one status:
+The cancel intent is recorded before anything is aborted or killed. From then on the run never advances its model shortlist or starts another execution attempt, even when terminating the pane makes the watcher observe a lost pane, and even when a fallback launch was already in flight. On Core, cancellation before `terminal.run` submission prevents submission, including during its connection handshake. After submission, the host still receives the acquisition result so it can terminate an acquired owner; a lost reply remains uncertain, not a safe retry. The result reports one status:
 
 | Status | Meaning |
 | --- | --- |
@@ -446,7 +485,7 @@ The destination workspace is focused only after Pi startup is confirmed. Every f
 
 Parent sessions can call `worktree_remove({ target: "<path|branch|workspace-id>", preserve: true })` or `/worktree remove <target> [--preserve]`. Preservation is optional and never implied: dirty work is blocked unless explicitly committed first or preserved as a WIP commit. The result reports its SHA even if removal later fails or is refused. A failed preservation commit restores the pre-preservation index and never proceeds to removal. Inventory and removal reports disclose exact ignored-file counts: enumeration is streamed rather than buffered as one listing. Ignored files do not block cleanup and are not captured by preservation; failed counting still blocks removal.
 
-Eligibility is rechecked at removal time: canonical source-repository cwd containment, registered linked checkout, no detected process holder, known live child, or persistent lease, and clean Git state with no untracked files or conflicts. A successful launch from a linked checkout does not itself authorize its removal; cleanup uses the canonical principal/source repository under the invoking parent session's cwd, not `manifest.sourceCwd` or shared Git identity. Start the parent Pi session rooted at that principal checkout or an ancestor containing it, then use normal explicit cleanup; `cd` inside an existing Pi session does not change the session cwd. A source repository that is a Git submodule is located through the `core.worktree` setting of its shared Git directory under the superproject's `.git/modules`, not through that directory's parent. Unknown inspection, identity disagreements, detached HEAD, locked checkouts, and initialized submodules block removal. Out-of-scope repositories are never eligible. Open worktree workspaces use Herdr removal. The source repository's primary workspace is never closed automatically. If this process recorded that worktree creation appeared to open it and a read taken just before the report still shows it untouched, removal adds `wX appears to have been opened by worktree creation; if you haven't used it, close it with herdr workspace close wX`; a missing or wrong-typed field, another open workspace for the repository, another session, or a restarted process reports nothing. Orphans use Git removal and registration pruning after checkout absence is verified. Owned reachable manifests are marked `removed`; manifests from other sessions are not required or rewritten. Stale removed manifests never govern a recreated checkout. Missing or dangling manifest paths do not affect unrelated checkouts; undecidable or conflicting manifest identity still blocks removal. A failed manifest update after removal is reported as a warning. Symlinked ancestors are supported; checkout symlinks escaping the canonical managed root are blocked. Process inspection covers observable same-user processes across sessions, regardless of runtime name, exempting only Herdr-confirmed idle retained shells, never runtimes at the same PID. Unreadable individual process details produce non-blocking warnings without an override flag; scanning continues so another observable holder still blocks removal. Human and structured inventory/removal results disclose incomplete coverage, including warnings seen before a later recheck or failure. Same-user inspection is permission-limited, and other-user processes are not inspected: a protected process could hold the checkout undetected. Warnings aggregate counts and bounded PID samples, not commands or environments. Linux uses `/proc`; macOS uses same-user `lsof` cwd records and warns for unreadable individual records. Unsupported platforms, failed global enumeration (including a failed `lsof` with partial output), and other unverifiable eligibility evidence still block removal. Cleanup Git and Herdr calls have 30-second timeouts.
+Eligibility is rechecked at removal time: canonical source-repository cwd containment, registered linked checkout, no detected process holder, known live child, or persistent lease, and clean Git state with no untracked files or conflicts. A successful launch from a linked checkout does not itself authorize its removal; cleanup uses the canonical principal/source repository under the invoking parent session's cwd, not `manifest.sourceCwd` or shared Git identity. Start the parent Pi session rooted at that principal checkout or an ancestor containing it, then use normal explicit cleanup; `cd` inside an existing Pi session does not change the session cwd. A source repository that is a Git submodule is located through the `core.worktree` setting of its shared Git directory under the superproject's `.git/modules`, not through that directory's parent. Unknown inspection, identity disagreements, detached HEAD, locked checkouts, and initialized submodules block removal. Out-of-scope repositories are never eligible. Open worktree workspaces use Herdr removal. The source repository's primary workspace is never closed automatically. If this process recorded that worktree creation appeared to open it and a read taken just before the report still shows it untouched, removal adds `wX appears to have been opened by worktree creation; if you haven't used it, close it with herdr workspace close wX`; a missing or wrong-typed field, another open workspace for the repository, another session, or a restarted process reports nothing. Orphans use Git removal and registration pruning after checkout absence is verified. Owned reachable manifests are marked `removed`; manifests from other sessions are not required or rewritten. Stale removed manifests never govern a recreated checkout. Missing or dangling manifest paths do not affect unrelated checkouts; undecidable or conflicting manifest identity still blocks removal. A failed manifest update after removal is reported as a warning. Symlinked ancestors are supported; checkout symlinks escaping the canonical managed root are blocked. Process inspection covers observable same-user processes across sessions, regardless of runtime name, exempting only Herdr-confirmed idle retained shells, never runtimes at the same PID. Unreadable individual process details, including a same-user process whose cwd cannot be determined (any error other than ENOENT or ESRCH), produce non-blocking warnings without an override flag. Scanning continues so another observable holder still blocks removal. An undetermined cwd is not proof the process is idle. Human and structured inventory/removal results disclose incomplete coverage, including warnings seen before a later recheck or failure. Same-user inspection is permission-limited, and other-user processes are not inspected: a protected process could hold the checkout undetected. Warnings aggregate counts and bounded PID samples, not commands or environments. Cleanup path canonicalization uses lstat/stat/readlink only and does not `readdir` a managed entry until containment under the managed root is proven, so a protected-directory symlink cannot freeze Pi. Linux uses `/proc` and resolves `/proc/<pid>/cwd` with the no-open resolver only; macOS uses same-user `lsof` cwd records resolved without opening and warns for unreadable individual records. Unsupported platforms, failed global enumeration (including a failed `lsof` with partial output), and other unverifiable eligibility evidence still block removal. Cleanup Git and Herdr calls have 30-second timeouts.
 
 A worktree launch may add three asynchronous Herdr snapshots (`worktree list` before create, `worktree list` after create, and `pane list` for the opened primary), each bounded at 3 seconds. Together they can add up to 9 seconds of wall time within the worktree-acquisition budget without blocking the event loop. A failed snapshot claims nothing and is returned as a launch diagnostic, shown in the `subagent` acknowledgement and the `/worktree` notice; it is not written to the console. Claims are kept only in this process and are not written to the manifest. Ordinary non-worktree launches add no Herdr calls. Explicit removal adds a primary-workspace report only when this process holds a claim for the removed source repository: `worktree list`, `workspace get`, and `pane list`, each asynchronous and bounded at 3 seconds, taken after the checkout is removed. That is at most three calls and 9 seconds of wall time, without blocking the event loop. These report calls sit on top of the existing cleanup Git and Herdr calls, which stay at 30 seconds each.
 
@@ -512,9 +551,9 @@ Registered in: parent, child sessions.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `sessionPath` | string | yes | Path to the session .jsonl file to resume |
-| `name` | string | no | Display name for the terminal tab. Default: 'Resume' |
-| `message` | string | no | Optional message to send after resuming (e.g. follow-up instructions) |
-| `autoExit` | boolean | no | Whether the resumed session should automatically exit after completing its response. Defaults to true for autonomous follow-up work; set false for interactive resumed sessions. |
+| `name` | string | no | Display name for the run (and legacy Herdr tab). Default: 'Resume' |
+| `message` | string | no | Message to send after resuming. |
+| `autoExit` | boolean | no | Exit after the response. Defaults to true; set false to leave the session open for the user. |
 
 ### `subagent_send`
 

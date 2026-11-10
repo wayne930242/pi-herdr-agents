@@ -14,6 +14,9 @@ Create it by copying the installed package's `config.json.example`, or run
 
 ```json
 {
+  "herdr": {
+    "backend": "auto"
+  },
   "status": {
     "enabled": true
   },
@@ -42,13 +45,48 @@ Create it by copying the installed package's `config.json.example`, or run
 }
 ```
 
-If `config.json` is absent, status, role, pane, spawning, persistent-specialist, supervision, guidelines, and outcome-ledger settings fall back to `config.json.example`.
+If `config.json` is absent, backend, status, role, pane, spawning, persistent-specialist, supervision, guidelines, and outcome-ledger settings fall back to `config.json.example`.
 Model routing does not read the example: no model overrides apply until a real
 `config.json` exists.
 
 `config.json` is durable user state under the Pi agent directory and is loaded
-when the extension starts. Run `/reload` after changing it. Package-root
+when the extension starts. Run `/reload` after changing it, except that changing
+the selected backend or Core endpoint requires restarting Pi. Package-root
 `config.json` files are ignored; move them manually or re-run `/subagents-init`.
+
+## Herdr backend
+
+`herdr.backend` accepts only `"auto"` (default), `"legacy"`, or `"core"`.
+The `herdr` object accepts no other keys. Invalid values or malformed configuration
+fail closed; startup does not rewrite the file.
+
+- `auto` selects local Core when `HC_TERMINAL_ID` is present; otherwise it uses
+  legacy Herdr. Installed binaries or a running Desktop do not select Core.
+- `legacy` keeps the existing `herdr` CLI path and requires `HERDR_ENV=1`.
+- `core` requires a local native terminal ID (`t…`) and an absolute
+  `HC_TERMINAL_SOCKET`, falling back to `HC_SOCKET` only when the former is absent.
+  Do not manufacture these values to connect an unrelated shell to a terminal.
+
+Core startup is lazy: each RPC connection verifies generation 1, the required
+methods and the same Core identity. Launch verifies the native parent terminal
+is live. Core errors never switch execution to legacy Herdr. Backend, endpoint
+and parent-terminal binding survive reload; a changed binding is rejected before
+adopting new callbacks. Restart Pi to change it, including when upgrading from a
+runtime that predates backend binding.
+
+The first Core milestone supports ordinary fresh/fork/resumed/interactive and
+persistent children, automatic delivery, interrupt and cancel. Children run as
+background native programs (`no_notify`, `outlive_parent`, no `keep`, no `rm`).
+The host confirms exit independently of agent status and removes the retained
+record after delivery or suppression. A crashed parent can leave children alive;
+no new parent adopts those terminals by name.
+
+**Not supported on Core:** managed worktree launch/handoff/inventory/removal,
+remote terminals, Desktop `Agents` grouping, and the legacy sidebar plugin.
+Ordinary `cwd` may still point at an existing checkout. `panes.*` settings apply
+only to legacy Herdr. The host does not install Desktop mods, change layouts,
+or enable Core shell restoration. Native child trees are not visual parity with
+the legacy UI. See [ADR-0018](adr/0018-herdr-core-execution.md).
 
 ## Model preferences
 
@@ -93,6 +131,23 @@ shortlist `provider/model-id` when the
 authoring family is known; `task:review` does not establish independence. Family
 is the independence boundary; project policy may separately require a different
 provider. This is guidance, not extension enforcement.
+
+### Model catalog in the prompt
+
+The `subagent` tool's guidelines in the parent's system prompt tell it which
+models it can launch. With no configured shortlists, they list the first 24
+authenticated models, sorted by ID, with each model's thinking levels and
+limits. When `models.tasks` has at least one authenticated candidate, they list
+the shortlists and capabilities of their unique models. Other authenticated
+models appear as compact IDs, capped at 24, so reviewers can choose another
+family without guessing an ID. A session that scopes models (`--models` or
+`enabledModels`) lists its scoped set instead; see
+[Model resolution and fallback](#model-resolution-and-fallback).
+
+These guidelines reach the system prompt only while `subagent` is loaded. With
+Pi's built-in tool search, that starts when the model loads `subagent` through
+`tool_search`; without it, `subagent` is active from session start. See
+[Tool loading](tools.md#tool-loading).
 
 ## Draft task-model preferences
 
@@ -157,6 +212,13 @@ sent. Once an offer is recorded, a refusal or failure also stops init: it never
 falls back to the direct writer. See [Task-model init events](#task-model-init-events).
 
 ## Task-model writer
+
+The writer tool registers inactive, so its schema stays out of the model's tool
+list. `/subagents-init` activates it when it sends a prompt that names it. A
+successful write deactivates it again, even when it was enabled manually or
+restored by a reload or resume. A failed write leaves it active for a retry.
+An init that does not start undoes only its own activation. Another extension's
+approval flow never activates the writer.
 
 The writer validates and atomically replaces `models.tasks` and `tasksMeta`,
 preserving unrelated settings. Its tool schema accepts partial nonempty
@@ -362,6 +424,9 @@ too, as the role-pack bridge does.
 
 ## Sidebar markers
 
+This section applies to legacy Herdr only. Core terminals do not receive legacy
+pane tokens, and the Node sidebar plugin is not a Desktop mod.
+
 The extension always marks delegated children for the optional
 [Pi Herdr Agents Sidebar](../plugins/sidebar/README.md) Herdr plugin, whose Focus
 action hides marked children from Herdr's Agents view. There is no setting:
@@ -470,6 +535,9 @@ isolated Herdr tree, not parent-model latency; raw samples are written to
 `/tmp/issue29-bench/` by `test/bench/supervision-bench.mjs`.
 
 ## Pane placement
+
+This section applies to legacy Herdr only; Core launches have no Desktop pane
+placement in this milestone.
 
 `panes.mode` defaults to `"grouped"` when omitted. Ordinary public `subagent` and `subagent_resume` launches, including bare forks, fill extension-owned `Agents`, `Agents 2`, etc. tabs in the existing workspace chosen as described below. `panes.maxPerTab` is a positive safe integer, defaults to `4`, and counts all live panes in each owned tab, including user-added panes and retained shells. Overlapping launches in one parent respect this cap. It is independent of `persistent.maxAgents`.
 

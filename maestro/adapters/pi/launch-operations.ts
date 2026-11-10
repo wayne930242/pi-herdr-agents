@@ -3,6 +3,7 @@ import type {
 	SurfaceProvider,
 	AcquisitionControl,
 	WorktreeSurface,
+	NativeExecution,
 } from "../../core/surface-provider.ts";
 import type { WorktreeOperations } from "../../core/worktree.ts";
 import { Deadline } from "../../core/deadline.ts";
@@ -35,6 +36,8 @@ export interface WorktreeSurfaceForLaunch {
 }
 
 export interface PiLaunchOperations {
+	/** Present only for atomic native program launches, without a shell pane. */
+	nativeExecution?: NativeExecution;
 	/** Required for managed worktree launches; ordinary panes need no Git effects. */
 	worktree?: WorktreeOperations;
 	createPane(
@@ -271,6 +274,7 @@ export function launchOperationsFromSurface(
 	worktree?: WorktreeOperations,
 ): PiLaunchOperations {
 	return {
+		nativeExecution: provider.nativeExecution,
 		worktree,
 		createPane(name, cwd, control) {
 			return provider.createSurface({
