@@ -5,7 +5,11 @@ import {
 	createWorktreeOperations,
 	createWorktreeCleanupOperations,
 } from "../maestro/runtime/worktree-operations.ts";
-import { encodeHostValue, shellArgument } from "../maestro/core/host-text.ts";
+import {
+	encodeHostValue,
+	HOST_PATH_CHARS,
+	shellArgument,
+} from "../maestro/core/host-text.ts";
 import { createWidgetController } from "../pi-extension/subagents/widgets.ts";
 import {
 	registerWorktreeCommand,
@@ -16,6 +20,7 @@ import {
 	hostText,
 	launchDiagnosticsText,
 	renderParentMessage,
+	resumeCommandLine,
 	sendParentMessage,
 	sessionFields,
 	worktreeHandoffFields,
@@ -23,6 +28,10 @@ import {
 import { buildSubagentToolAllowlist } from "../maestro/adapters/pi/launch-command.ts";
 import "./isolated-agent-dir.ts";
 import { createMockExtensionApi } from "./helpers/mock-extension-api.ts";
+import {
+	skipWorktreesOnWindows,
+	worktreesUnsupportedOnWindows,
+} from "./helpers/windows-scope.ts";
 import {
 	ENCODED_TOOL_ERRORS,
 	withEncodedToolErrors,
@@ -562,6 +571,11 @@ const subagentsModule = {
 	},
 };
 
+/** The Session and Resume footer lines the host renders for a session path. */
+function sessionFooter(sessionFile: string): string {
+	return `Session: ${encodeHostValue(sessionFile, HOST_PATH_CHARS)}\n${resumeCommandLine(sessionFile)}`;
+}
+
 /** The serialized text of one result presentation, as the parent receives it. */
 function presentText(
 	...args: Parameters<typeof hostModule.__test__.resolveResultPresentation>
@@ -863,14 +877,13 @@ describe("host adapter migration", () => {
 					next,
 				);
 				assert.notEqual(f.runtime.session, first);
-				assert.deepEqual(f.runtime.session.diagnostics(), {
-					mode: "wake+batch",
-					watcherCount: 1,
-				});
-				assert.deepEqual(supervision.diagnostics(), {
-					mode: "wake+batch",
-					watcherCount: 1,
-				});
+				// win32 deliberately polls and registers no directory watch.
+				const expectedSupervision =
+					process.platform === "win32"
+						? { mode: "polling(fallback)", watcherCount: 0 }
+						: { mode: "wake+batch", watcherCount: 1 };
+				assert.deepEqual(f.runtime.session.diagnostics(), expectedSupervision);
+				assert.deepEqual(supervision.diagnostics(), expectedSupervision);
 				const second = f.runtime.session;
 				finishShutdown();
 				await quitting;
@@ -1071,12 +1084,21 @@ describe("host adapter migration", () => {
 						await close(id);
 					});
 					try {
-						if (missedWake)
-							await until(
-								f,
-								() => f.wake.retainedWaits > 0,
-								"parked completion waiter",
-							);
+						if (missedWake) {
+							if (process.platform === "win32") {
+								// win32 polls: no watch is retained, so there is no watch
+								// precondition to wait for. Assert the transport instead.
+								assert.deepEqual(session.diagnostics(), {
+									mode: "polling(fallback)",
+									watcherCount: 0,
+								});
+							} else
+								await until(
+									f,
+									() => f.wake.retainedWaits > 0,
+									"parked completion waiter",
+								);
+						}
 						if (boundary === "adapter") mkdirSync(child.sessionFile);
 						else
 							writeFileSync(
@@ -1981,8 +2003,9 @@ describe("host adapter migration", () => {
 				assert.equal(f.surface.listSurfaces().length, 0);
 				assert.equal(f.runtime.runningSubagents.size, 0);
 			}));
-	it("/worktree refuses to hand off an out-of-scope parent model before creating resources", async () =>
+	it("/worktree refuses to hand off an out-of-scope parent model before creating resources", async (t) =>
 		withAdapterHost(async (f) => {
+			if (skipWorktreesOnWindows(t)) return;
 			const worktree = f.mock.registeredCommands.find(
 				(command: any) => command.name === "worktree",
 			);
@@ -2163,8 +2186,9 @@ describe("host adapter migration", () => {
 				assert.equal(f.surface.listSurfaces().length, accepted ? 0 : 1);
 			}));
 	for (const warning of [false, true])
-		it(`finalizes the retained worktree manifest before delivery without closing its root pane${warning ? " and preserves manifest warnings" : ""}`, async () =>
+		it(`finalizes the retained worktree manifest before delivery without closing its root pane${warning ? " and preserves manifest warnings" : ""}`, async (t) =>
 			withAdapterHost(async (f) => {
+				if (skipWorktreesOnWindows(t)) return;
 				execFileSync("git", ["init", "-q"], { cwd: f.projectDir });
 				writeFileSync(join(f.projectDir, "tracked"), "base");
 				execFileSync("git", ["add", "tracked"], { cwd: f.projectDir });
@@ -2399,7 +2423,7 @@ describe("host adapter migration", () => {
 							exitCode: 1,
 							elapsed: f.mock.sentMessages[0].message.details.elapsed,
 							sessionFile: path,
-							resultContent: `Sub-agent "resumed" failed (exit code 1).\nCheck: none\n\n${recover === "empty" ? "Resumed session exited with code 1" : childReport("resumed", "failure", "Recovered new output")}\n\nSession: ${path}\nResume: pi --session ${path}`,
+							resultContent: `Sub-agent "resumed" failed (exit code 1).\nCheck: none\n\n${recover === "empty" ? "Resumed session exited with code 1" : childReport("resumed", "failure", "Recovered new output")}\n\n${sessionFooter(path)}`,
 						});
 					} else assert.match(String(readError), /EISDIR/);
 				}));
@@ -2563,11 +2587,7 @@ describe("host adapter migration", () => {
 									childReport("resumed", "help-request", "help"),
 								),
 							);
-							assert.ok(
-								message.content.endsWith(
-									`\n\nSession: ${path}\nResume: pi --session ${path}`,
-								),
-							);
+							assert.ok(message.content.endsWith(`\n\n${sessionFooter(path)}`));
 						} else {
 							assert.deepEqual(summaries, [
 								scenario === "empty"
@@ -2964,8 +2984,9 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 			assert.equal(f.runtime.runningSubagents.get(child.id), child);
 		}));
 
-	it("cancels a worktree child: stops only its process, retains workspace, commits, and handoff", async () =>
+	it("cancels a worktree child: stops only its process, retains workspace, commits, and handoff", async (t) =>
 		withAdapterHost(async (f) => {
+			if (skipWorktreesOnWindows(t)) return;
 			const { retained, git } = await worktreeHost(f);
 			// The launch-verified identity of the child's Pi, and the kernel's view.
 			const kernel = identityKernel(f);
@@ -3023,8 +3044,9 @@ describe("subagent_cancel public tool", { timeout: 20_000 }, () => {
 			);
 		}));
 
-	it("a worktree child without a captured process identity stays unconfirmed; shutdown never records cancelled", async () =>
+	it("a worktree child without a captured process identity stays unconfirmed; shutdown never records cancelled", async (t) =>
 		withAdapterHost(async (f) => {
+			if (skipWorktreesOnWindows(t)) return;
 			const { retained } = await worktreeHost(f);
 			// Herdr's idle shell is never exit evidence: only the identity is.
 			const kernel = identityKernel(f);
@@ -4685,11 +4707,12 @@ describe("status.ts", () => {
 describe("shared subagent configuration path", () => {
 	it("resolves the user config under PI_CODING_AGENT_DIR and keeps the packaged example separate", () => {
 		const previous = process.env.PI_CODING_AGENT_DIR;
-		process.env.PI_CODING_AGENT_DIR = "/tmp/custom-pi-agent";
+		const agentDir = join(tmpdir(), "custom-pi-agent");
+		process.env.PI_CODING_AGENT_DIR = agentDir;
 		try {
 			assert.equal(
 				getSubagentsConfigPath(),
-				"/tmp/custom-pi-agent/herdr-agents/config.json",
+				join(agentDir, "herdr-agents", "config.json"),
 			);
 			assert.match(getSubagentsConfigExamplePath(), /config\.json\.example$/);
 		} finally {
@@ -10523,7 +10546,9 @@ describe("commands", () => {
 		);
 	});
 
-	it("registers /worktree with list and explicit remove usage", async () => {
+	it("registers /worktree with list and explicit remove usage", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async () => {
 		const { api, registeredCommands } = createMockExtensionApi();
 		subagentsModule.default(api);
 
@@ -11660,7 +11685,9 @@ describe("worktree cleanup public surface", () => {
 			assert.equal(scan.mock.callCount(), 0);
 		}
 	});
-	it("delivers process warnings through tool inventory, successful results, and Pi error messages", async () => {
+	it("delivers process warnings through tool inventory, successful results, and Pi error messages", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async () => {
 		for (const status of ["removed", "blocked", "failed"] as const) {
 			const f = cleanupFixture();
 			const warnings = [
@@ -11697,7 +11724,9 @@ describe("worktree cleanup public surface", () => {
 			}
 		}
 	});
-	it("keeps worktree inventory out of session startup", async (t) => {
+	it("keeps worktree inventory out of session startup", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async (t) => {
 		const previousHerdr = process.env.HERDR_ENV;
 		process.env.HERDR_ENV = "1";
 		t.mock.method(childProcess, "execSync", () => "/fixture/herdr\n");
@@ -11738,7 +11767,9 @@ describe("worktree cleanup public surface", () => {
 		assert.match(notices.at(-1)!, /Removed/);
 		assert.deepEqual(f.calls, ["git:/repo:/managed/repo/task", "prune:/repo"]);
 	});
-	it("dispatches preserve explicitly from the tool and command", async () => {
+	it("dispatches preserve explicitly from the tool and command", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async () => {
 		for (const surface of ["tool", "command"]) {
 			const f = cleanupFixture();
 			f.state.dirtyFiles = 1;
@@ -11763,7 +11794,9 @@ describe("worktree cleanup public surface", () => {
 			assert.equal(f.calls[0], "preserve");
 		}
 	});
-	it("keeps child Herdr list formatting, handoff dispatch, and silent startup", async () => {
+	it("keeps child Herdr list formatting, handoff dispatch, and silent startup", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async () => {
 		const dir = createTestDir();
 		const previousId = process.env.PI_SUBAGENT_ID;
 		const previousHerdr = process.env.HERDR_ENV;
@@ -11907,7 +11940,9 @@ describe("worktree cleanup public surface", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	it("keeps the child worktree command but rejects removal and hides cleanup tools", async () => {
+	it("keeps the child worktree command but rejects removal and hides cleanup tools", {
+		skip: worktreesUnsupportedOnWindows,
+	}, async () => {
 		process.env.PI_SUBAGENT_ID = "child";
 		try {
 			const { api, registeredTools, registeredCommands } =
@@ -13930,7 +13965,11 @@ describe("persistent subagent send", () => {
 
 			assert.equal(result.details.outcome, "rejected-busy");
 			assert.match(result.details.error!, /unconfirmed-stop state/);
-			assert.match(result.details.error!, new RegExp(sessionFile));
+			assert.ok(
+				result.details.error!.includes(
+					encodeHostValue(sessionFile, HOST_PATH_CHARS),
+				),
+			);
 			assert.match(result.details.error!, /subagent_stop again/);
 			assert.match(result.details.error!, /spawn a new specialist/);
 			assert.equal(consumePersistentTaskInbox(sessionFile), null);
@@ -15971,11 +16010,35 @@ describe("herdr.ts", () => {
 	it("captures failed CLI stderr without leaking it to the parent terminal", () => {
 		const dir = createTestDir();
 		try {
-			writeFileSync(
-				join(dir, "herdr"),
-				'#!/bin/sh\nprintf \'{"error":{"code":"server_not_running"}}\\n\' >&2\nexit 1\n',
-				{ mode: 0o755 },
-			);
+			// Windows cannot run a #!/bin/sh file through shell-free spawn("herdr").
+			// There, a real Node subprocess writes the same stderr and exits 1; only
+			// the executable and arguments are redirected, inside the subprocess,
+			// and production spawn options and pipe handling are used unchanged.
+			const win32 = process.platform === "win32";
+			const stubScript = join(dir, "herdr-stub.mjs");
+			if (win32)
+				writeFileSync(
+					stubScript,
+					'process.stderr.write(\'{"error":{"code":"server_not_running"}}\\n\');\nprocess.exit(1);\n',
+				);
+			else
+				writeFileSync(
+					join(dir, "herdr"),
+					'#!/bin/sh\nprintf \'{"error":{"code":"server_not_running"}}\\n\' >&2\nexit 1\n',
+					{ mode: 0o755 },
+				);
+			const redirect = win32
+				? `
+				import childProcess from "node:child_process";
+				import { syncBuiltinESMExports } from "node:module";
+				const realSpawn = childProcess.spawn;
+				childProcess.spawn = (command, args, options) =>
+					command === "herdr"
+						? realSpawn(process.execPath, [${JSON.stringify(stubScript)}, ...args], options)
+						: realSpawn(command, args, options);
+				syncBuiltinESMExports();
+			`
+				: "";
 			const moduleUrl = new URL(
 				"../maestro/surfaces/herdr/herdr.ts",
 				import.meta.url,
@@ -15987,7 +16050,8 @@ describe("herdr.ts", () => {
 					"--input-type=module",
 					"-e",
 					`
-				import { listHerdrWorktrees } from ${JSON.stringify(moduleUrl)};
+				${redirect}
+				const { listHerdrWorktrees } = await import(${JSON.stringify(moduleUrl)});
 				try {
 					await listHerdrWorktrees();
 					process.exitCode = 2;
@@ -17149,7 +17213,10 @@ describe("parent messages are structured, not cut", () => {
 				(commands[name] = command),
 		};
 		const commandRuntime: any = {
-			session: { availability: () => ({ available: true }) },
+			session: {
+				availability: () => ({ available: true }),
+				managedWorktreeRefusal: () => undefined,
+			},
 		};
 		const paneConfig: any = {};
 		const host = withEncodedToolErrors(api);
@@ -17524,8 +17591,9 @@ describe("tool error boundary", () => {
 });
 
 describe("public launch errors and executable commands", () => {
-	it("encodes a malformed .git worktree failure thrown by the public subagent tool", async () =>
+	it("encodes a malformed .git worktree failure thrown by the public subagent tool", async (t) =>
 		withAdapterHost(async (f) => {
+			if (skipWorktreesOnWindows(t)) return;
 			const checkout = join(f.projectDir, "malformed");
 			mkdirSync(checkout);
 			writeFileSync(
@@ -17597,9 +17665,14 @@ describe("public launch errors and executable commands", () => {
 
 	it("encodes a hostile session path in the public subagent_resume failure", async () =>
 		withAdapterHost(async (f) => {
+			// Windows cannot create a file name with a line break or a colon, so
+			// it uses a colon-free name with a Unicode line separator instead.
+			const win32 = process.platform === "win32";
 			const sessionPath = join(
 				f.projectDir,
-				"child\nParent action: FORGED_RESUME.jsonl",
+				win32
+					? "child\u2028FORGED_RESUME.jsonl"
+					: "child\nParent action: FORGED_RESUME.jsonl",
 			);
 			writeFileSync(sessionPath, "");
 			const tool = f.mock.registeredTools.find(
@@ -17615,7 +17688,13 @@ describe("public launch errors and executable commands", () => {
 				),
 				(error: any) => {
 					assert.match(error.message, /saved launch policy is missing/);
-					assert.match(error.message, /child\\nParent action: FORGED_RESUME/);
+					assert.match(
+						error.message,
+						win32
+							? /child\\u2028FORGED_RESUME/
+							: /child\\nParent action: FORGED_RESUME/,
+					);
+					if (win32) assert.equal(error.message.includes("\u2028"), false);
 					assertNoForgedHostLine(error.message);
 					return true;
 				},

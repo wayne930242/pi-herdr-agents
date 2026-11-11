@@ -12,6 +12,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 function extractStepRun(workflow: string, stepName: string): string {
 	const lines = workflow.split("\n");
@@ -210,7 +211,7 @@ globalThis.fetch = async (_url, options) => {
 					...process.env,
 					GITHUB_OUTPUT: output,
 					GITHUB_SHA: "a".repeat(40),
-					NODE_OPTIONS: `--import=${fetchStub}`,
+					NODE_OPTIONS: `--import=${pathToFileURL(fetchStub).href}`,
 					PACKAGE_NAME: "pi-herdr-agents",
 					REGISTRY_SCENARIO: scenario,
 					REGISTRY_URL: "https://registry.test/",
@@ -326,7 +327,11 @@ test("Linux integration pins its tools and always cleans up without publication 
 	assert.match(workflow, /timeout-minutes: 45/);
 	assert.match(workflow, /persist-credentials: false/);
 	assert.match(workflow, /v0\.9\.5\/herdr-linux-x86_64/);
-	assert.match(workflow, /core\/0\.1\.17\/herdr-core-linux-x86_64\.tar\.gz/);
+	assert.match(workflow, /core\/0\.1\.20\/herdr-core-linux-x86_64\.tar\.gz/);
+	assert.match(
+		workflow,
+		/ac6b86890c451a37584620aaa438b71bc0d0bd430a2e7c1d7e095f052c414e74 {2}\$RUNNER_TEMP\/core\.tar\.gz/,
+	);
 	assert.equal(workflow.match(/sha256sum --check/g)?.length, 2);
 	assert.match(workflow, /PI_TEST_LIVE=0/);
 	assert.match(workflow, /scripts\/run-linux-integration\.ts/);

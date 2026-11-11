@@ -52,6 +52,8 @@ Fakes are for conformance tests only.
 - `maestro/core/git-environment.ts` removes inherited repository-selection and
   command-local Git configuration overrides from host-managed Git subprocesses.
   It retains user configuration, identity, and hooks.
+- `maestro/core/platform-support.ts` — the Windows support scope: the shared
+  refusal predicate and messages for managed worktrees and Herdr Core on win32.
 - `maestro/core/deadline.ts` defines finite monotonic operation budgets.
   `maestro/surfaces/herdr/herdr-cli.ts` owns bounded asynchronous Herdr clients.
   `maestro/runtime/worktree-operations.ts` owns asynchronous Git preflight and
@@ -116,7 +118,7 @@ manually from GitHub Actions. Its **Unit tests (Windows, non-blocking)** job run
 on `windows-latest` and, after dependency installation, runs only `npm test`.
 It is allowed to fail and must not be cited as passing verification evidence
 while that policy remains in place. The separate **Linux integration** workflow runs on
-pushes to `main` or manual dispatch. It pins legacy Herdr 0.9.5 and Core 0.1.17
+pushes to `main` or manual dispatch. It pins legacy Herdr 0.9.5 and Core 0.1.20
 with SHA-256 checks, uses the lockfile's Pi, and runs on Ubuntu 24.04 without
 provider credentials or a GUI. `scripts/run-linux-integration.ts` reuses the
 private verification lab for a real-parent delegation, then runs the complete
@@ -142,6 +144,8 @@ npm pack --dry-run
 
 Unit tests do not depend on the shell they run in, so `npm test` and single-file `node --experimental-strip-types --test <file>` runs behave the same inside a Pi subagent or a Herdr pane as in CI. Every unit-test entry file first imports `test/clean-host-env.ts` (directly or through `test/isolated-agent-dir.ts`), which removes inherited `PI_*`, `HERDR_*`, and `HC_*` variables except `PI_TEST_*`, `PI_BIN`, `HERDR_BIN`, and `HERDR_CORE_BIN`. A test that needs one of the removed variables sets it explicitly. `test/maestro/test-environment.test.ts` fails if an entry file in the `npm test` script lacks that first import.
 
+A unit test that starts a fake socket server listens on `socketPath(dir, name)` from `test/socket-path.ts`: it returns `dir/name` on Linux and macOS and a unique `\\.\pipe\` named pipe on Windows, where Node cannot listen on a filesystem path.
+
 The public tool schemas are captured by loading the real extensions. After changing a tool name, description, or parameter, run `npm run docs:tools` to regenerate `test/fixtures/tool-schema/current.json` and the marked blocks in `docs/tools.md`, and commit the result. `test/maestro/tool-schema.test.ts` also compares the snapshot with `test/fixtures/tool-schema/released.json`, the last released contract, and fails on a change that would break an existing client: a removed or newly required property, a changed type, or a narrowed union or enum. Release copies `current.json` over `released.json`.
 
 `npm run lint` needs Node.js 22.18+ (or 22.6–22.17 with `NODE_OPTIONS=--experimental-strip-types`) because oxlint imports TypeScript directly: its configuration, `oxlint.config.ts`, and the JavaScript plugin it loads, `tools/oxlint/anti-slop/index.ts`. Without type stripping, oxlint fails before linting with `Unknown file extension ".ts"`. This is a contributor tooling requirement, not a runtime requirement for package users.
@@ -166,8 +170,10 @@ Core session and socket, and identity-checked shutdown without PID signalling.
 `core-parent.ts` loads this checkout in real parent/child Pi processes against
 the local deterministic provider. npm puts `node_modules/.bin` first on PATH,
 so set `PI_BIN` explicitly to verify an installed Pi rather than the repository's
-pinned version. Core 0.1.16 has been exercised with Pi 1.1.0 and 1.4.0;
-Core 0.1.17 has also passed with Pi 1.4.0. The tests exercise public tools, not `__test__`,
+pinned version. `PI_BIN` must be an executable named `pi`: the lab builds child
+terminals' PATH from its directory and children start a bare `pi`, so a path to
+the bundle's `cli.js` makes children exit 127. Core 0.1.16 has been exercised with Pi 1.1.0 and 1.4.0;
+Core 0.1.17 has also passed with Pi 1.4.0, and Core 0.1.17 and 0.1.20 with Pi 1.1.0. The tests exercise public tools, not `__test__`,
 and save sessions, provider requests and native inventory/screens under the
 reported `/tmp/piha-core-evidence-*` directories before removing lab resources.
 Unknown startup/shutdown ownership retains the lab and fails the test. No daily

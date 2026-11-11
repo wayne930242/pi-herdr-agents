@@ -34,6 +34,10 @@ import {
 } from "../adapters/pi/session.ts";
 import { createHerdrProvider, resolveHerdrBinding } from "./herdr-backend.ts";
 import {
+	assertManagedWorktreesSupported,
+	managedWorktreeRefusal,
+} from "../core/platform-support.ts";
+import {
 	assertSameHerdrBinding,
 	type HerdrBinding,
 } from "../core/config/herdr-config.ts";
@@ -255,7 +259,11 @@ export function createDefaultRunSession(
 	// Injected infrastructure is a closed world: never inspect ambient Core sockets.
 	const binding: HerdrBinding = options.infrastructure
 		? { backend: "legacy" }
-		: resolveHerdrBinding(options.configDir, options.configExamplePath);
+		: resolveHerdrBinding(
+				options.configDir,
+				options.configExamplePath,
+				options.platform,
+			);
 	if (adopted) {
 		assertSameHerdrBinding(adopted.binding, binding);
 		const previousNative =
@@ -339,6 +347,8 @@ export function createDefaultRunSession(
 			terminationRecheckMs: options.infrastructure?.terminationRecheckMs,
 			operations: {
 				async prepare(task, role) {
+					if (task.worktree)
+						assertManagedWorktreesSupported(state.options.platform);
 					const snapshot = state.options.getLaunchSnapshot();
 					if (!snapshot.parentRuntime)
 						throw new Error("Pi launch requires the active parent runtime");
@@ -959,6 +969,7 @@ export function createDefaultRunSession(
 	const facade: PiRunSession = {
 		...state.kernel,
 		async handoffWorktree(input) {
+			assertManagedWorktreesSupported(state.options.platform);
 			// This is a long-lived interactive handoff, deliberately outside the
 			// watched kernel: no task reservation, acquire, producer or watcher.
 			const snapshot = input.snapshot;
@@ -985,6 +996,7 @@ export function createDefaultRunSession(
 			return { record: result.running, focusError: result.focusError };
 		},
 		createWorktreeCleanupOperations: (input) => {
+			assertManagedWorktreesSupported(state.options.platform);
 			if (state.infrastructure.surfaceProvider.nativeExecution)
 				throw new Error(
 					"Managed worktree cleanup is not supported by Herdr Core",
@@ -994,7 +1006,12 @@ export function createDefaultRunSession(
 				input,
 			);
 		},
+		managedWorktreeRefusal: () =>
+			managedWorktreeRefusal(state.options.platform),
 		async spawnPi(input) {
+			// Refuse before the kernel reserves the task or any attempt starts.
+			if (input.task.worktree)
+				assertManagedWorktreesSupported(state.options.platform);
 			try {
 				return await state.kernel.spawn(input.task, prepare(input));
 			} finally {
