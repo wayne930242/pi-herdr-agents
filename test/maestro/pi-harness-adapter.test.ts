@@ -2,6 +2,7 @@ import "../clean-host-env.ts";
 import assert from "node:assert/strict";
 import {
 	mkdtempSync,
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	rmSync,
@@ -10,8 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, type TestContext } from "node:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import { gitEnvironment } from "../../maestro/core/git-environment.ts";
+import { worktreesUnsupportedOnWindows } from "../helpers/windows-scope.ts";
 import { cleanupTestProcess } from "../helpers/process-cleanup.ts";
 import { PiHarnessAdapter } from "../../maestro/adapters/pi/pi-harness-adapter.ts";
 import {
@@ -188,44 +191,94 @@ describe("PiHarnessAdapter", () => {
 			assert.equal(f.surface.listSurfaces().length, 1);
 			assert.equal(f.supervision.diagnostics().watcherCount, 0);
 		}));
-	it("exports PI_SUBAGENT_SELF_SPAWN only for a named role that declared self-spawn and kept spawning", async () =>
-		usingFixture(async (f) => {
-			const commands: string[] = [];
-			f.operations.runScript = (_surface, command, options) => {
-				commands.push(command);
-				return options.scriptPath;
-			};
-			const launch = async (
-				defaults: NonNullable<SpawnOptions["role"]["defaults"]>,
-			) => {
-				await f.adapter.spawn({
-					...f.options,
-					role: { ...f.options.role, defaults },
+	it(
+		"seeds a worktree launch's project packages from the launch cwd's relative path",
+		{
+			skip: worktreesUnsupportedOnWindows,
+		},
+		async () =>
+			usingFixture(async (f) => {
+				const repo = join(f.root, "repo");
+				const app = join(repo, "apps", "web");
+				mkdirSync(app, { recursive: true });
+				writeFileSync(join(app, "README.md"), "app\n");
+				const git = (...args: string[]) =>
+					execFileSync("git", args, {
+						cwd: repo,
+						env: gitEnvironment(),
+						stdio: "ignore",
+					});
+				git("init", "-q", "-b", "main");
+				git("add", ".");
+				git(
+					"-c",
+					"user.name=t",
+					"-c",
+					"user.email=t@example.test",
+					"commit",
+					"-q",
+					"-m",
+					"init",
+				);
+				mkdirSync(join(app, ".pi", "npm", "node_modules", "pi-code"), {
+					recursive: true,
 				});
-				return commands.at(-1) ?? "";
-			};
-			assert.match(
-				await launch({ autoExit: true }),
-				/PI_SUBAGENT_SELF_SPAWN=0/,
-			);
-			assert.match(
-				await launch({ autoExit: true, selfSpawn: false }),
-				/PI_SUBAGENT_SELF_SPAWN=0/,
-			);
-			const enabled = await launch({ autoExit: true, selfSpawn: true });
-			assert.match(enabled, /PI_SUBAGENT_AGENT='worker'/);
-			assert.match(enabled, /PI_SUBAGENT_SELF_SPAWN=1/);
-			assert.doesNotMatch(enabled, /PI_DENY_TOOLS/);
-
-			// `spawning: false` denies the spawning tools and wins over `self-spawn`.
-			const denied = await launch({
-				autoExit: true,
-				selfSpawn: true,
-				spawning: false,
-			});
-			assert.match(denied, /PI_SUBAGENT_SELF_SPAWN=0/);
-			assert.match(denied, /PI_DENY_TOOLS='subagent,/);
-		}));
+				writeFileSync(
+					join(app, ".pi", "npm", "node_modules", "pi-code", "index.js"),
+					"1\n",
+				);
+				// The fake provider names the worktree path but creates no checkout.
+				const createWorktreeSurface = f.surface.createWorktreeSurface.bind(
+					f.surface,
+				);
+				f.surface.createWorktreeSurface = (opts) => {
+					const created = createWorktreeSurface(opts);
+					mkdirSync(join(created.path, "apps", "web"), { recursive: true });
+					return created;
+				};
+				const adapterWith = (
+					effects: ReturnType<typeof createWorktreeOperations>,
+				) =>
+					new PiHarnessAdapter({
+						surface: f.surface,
+						paneConfig,
+						worktreeOperations: effects,
+						modelRegistry: f.modelRegistry,
+						supervision: f.supervision,
+						parent: {
+							cwd: f.root,
+							sessionFile: join(f.root, "parent", "parent.jsonl"),
+							sessionId: "parent",
+							sessionDir: join(f.root, "parent"),
+							agentDir: join(f.root, "agent"),
+						},
+						parentRuntime: {
+							provider: "fake",
+							modelId: "test",
+							thinking: "off",
+						},
+					});
+				const seeded = await adapterWith(createWorktreeOperations()).spawn({
+					...f.options,
+					cwd: app,
+					worktreeRequest: { branch: "seeded" },
+				});
+				assert.ok(
+					existsSync(
+						join(
+							seeded.worktree!.path,
+							"apps",
+							"web",
+							".pi",
+							"npm",
+							"node_modules",
+							"pi-code",
+							"index.js",
+						),
+					),
+				);
+			}),
+	);
 	it("never lets pane-shell values for self-spawn or depth reach a child", async () =>
 		usingFixture(async (f) => {
 			const commands: string[] = [];

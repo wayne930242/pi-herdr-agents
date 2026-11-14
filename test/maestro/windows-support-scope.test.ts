@@ -163,6 +163,7 @@ async function loadHost(platform: NodeJS.Platform) {
 		resolveGitCommit: async () => reached("resolveGitCommit")(),
 		resolveWorktreeProvisionCwd: async () =>
 			reached("resolveWorktreeProvisionCwd")(),
+		seedProjectPackages: async () => reached("seedProjectPackages")(),
 		writeWorktreeManifest: reached("writeWorktreeManifest"),
 		captureWorktreeHandoff: async () => reached("captureWorktreeHandoff")(),
 		persistWorktreeResult: reached("persistWorktreeResult"),
@@ -453,6 +454,7 @@ async function genericSpawn(platform: NodeJS.Platform) {
 				resolveGitCommit: async () => reached("resolveGitCommit")(),
 				resolveWorktreeProvisionCwd: async () =>
 					reached("resolveWorktreeProvisionCwd")(),
+				seedProjectPackages: async () => reached("seedProjectPackages")(),
 				writeWorktreeManifest: reached("writeWorktreeManifest"),
 				captureWorktreeHandoff: async () => reached("captureWorktreeHandoff")(),
 				persistWorktreeResult: reached("persistWorktreeResult"),

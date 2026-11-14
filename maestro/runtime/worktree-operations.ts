@@ -6,6 +6,7 @@ import {
 	lstatSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 	unlinkSync,
 } from "node:fs";
@@ -133,6 +134,165 @@ export async function resolveGitCommit(
 			Deadline.after(GIT_BASE_TIMEOUT_MS),
 		),
 	);
+}
+
+/** Total wall time for seeding every project package dir of one launch. */
+export const PROJECT_PACKAGE_SEED_TIMEOUT_MS = 60_000;
+
+function isRealDirectory(path: string): boolean {
+	try {
+		return lstatSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function hasEntries(path: string): boolean {
+	try {
+		return readdirSync(path).length > 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Project package dirs Pi installs under `.pi/`. `npm` is installed once it holds
+ * `node_modules`; `git` has no marker, so any content counts.
+ */
+const PROJECT_PACKAGE_DIRS: ReadonlyArray<{
+	name: string;
+	installed(dir: string): boolean;
+}> = [
+	{
+		name: "npm",
+		installed: (dir) => isRealDirectory(join(dir, "node_modules")),
+	},
+	{ name: "git", installed: hasEntries },
+];
+
+/** Copy attempts in order: an APFS/reflink clone where the host has one, then a plain copy. */
+function copyAttempts(): string[][] {
+	if (process.platform === "darwin") return [["-cR"], ["-R"]];
+	if (process.platform === "linux") return [["-R", "--reflink=auto"], ["-R"]];
+	return [["-R"]];
+}
+
+/** One owned `cp`; the deadline kills its process group so a huge tree cannot hold the launch. */
+async function runCopy(
+	args: string[],
+	source: string,
+	destination: string,
+	deadline: Deadline,
+): Promise<void> {
+	const timeout = deadline.remainingMs();
+	return new Promise((resolvePromise, reject) => {
+		const child = spawn("cp", [...args, `${source}${sep}.`, destination], {
+			stdio: ["ignore", "ignore", "pipe"],
+			detached: process.platform !== "win32",
+		});
+		let settled = false;
+		const errors: Buffer[] = [];
+		let errorBytes = 0;
+		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			try {
+				if (process.platform !== "win32" && child.pid)
+					process.kill(-child.pid, "SIGKILL");
+				else child.kill("SIGKILL");
+			} catch {
+				/* already exited */
+			}
+			child.stderr.destroy();
+			child.unref();
+			reject(error);
+		};
+		const timer = setTimeout(
+			() => fail(new Error(`copy exceeded its ${timeout}ms budget`)),
+			timeout,
+		);
+		child.on("error", fail);
+		child.stderr.on("data", (chunk: Buffer) => {
+			errorBytes += chunk.length;
+			if (errorBytes <= 4096) errors.push(chunk);
+		});
+		child.on("close", (code, signal) => {
+			if (settled) return;
+			if (code !== 0)
+				return fail(
+					new Error(
+						`cp exited ${code ?? signal}: ${Buffer.concat(errors).toString("utf8").trim()}`,
+					),
+				);
+			settled = true;
+			clearTimeout(timer);
+			resolvePromise();
+		});
+	});
+}
+
+/**
+ * Seeds a new managed worktree with the source checkout's installed project
+ * packages (`.pi/npm`, `.pi/git`), which are gitignored and so never reach the
+ * worktree. Without them the child's Pi installs them at startup, which can
+ * outlast launch readiness. Directories are matched by the launch cwd's path
+ * inside its repository. Returns warnings; it never throws.
+ */
+export async function seedProjectPackages(
+	sourceCwd: string,
+	worktreePath: string,
+): Promise<string[]> {
+	const warnings: string[] = [];
+	const deadline = Deadline.after(PROJECT_PACKAGE_SEED_TIMEOUT_MS);
+	let prefix: string;
+	try {
+		prefix = (
+			await gitRead(
+				sourceCwd,
+				["rev-parse", "--show-prefix"],
+				deadline.cappedAt(GIT_BASE_TIMEOUT_MS),
+			)
+		).trim();
+	} catch (error) {
+		return [
+			`Project package seeding skipped: cannot locate ${sourceCwd} in its repository: ${message(error)}`,
+		];
+	}
+	const targetBase = join(worktreePath, prefix);
+	if (!contained(worktreePath, targetBase) || !isRealDirectory(targetBase))
+		return warnings;
+	for (const { name, installed } of PROJECT_PACKAGE_DIRS) {
+		const source = join(sourceCwd, ".pi", name);
+		const target = join(targetBase, ".pi", name);
+		if (!isRealDirectory(source) || !installed(source) || installed(target))
+			continue;
+		const created = !existsSync(target);
+		let failure = "";
+		let copied = false;
+		for (const args of copyAttempts()) {
+			try {
+				mkdirSync(target, { recursive: true });
+				await runCopy(args, source, target, deadline);
+				copied = true;
+				break;
+			} catch (error) {
+				failure = message(error);
+				if (created) rmSync(target, { recursive: true, force: true });
+				else
+					rmSync(join(target, "node_modules"), {
+						recursive: true,
+						force: true,
+					});
+				if (deadline.expired()) break;
+			}
+		}
+		if (!copied)
+			warnings.push(
+				`Project package seeding failed for .pi/${name}; the child will install its own: ${failure}`,
+			);
+	}
+	return warnings;
 }
 
 export async function resolveWorktreeProvisionCwd(
@@ -791,6 +951,7 @@ export function createWorktreeOperations(): WorktreeOperations {
 	return {
 		resolveGitCommit,
 		resolveWorktreeProvisionCwd,
+		seedProjectPackages,
 		writeWorktreeManifest,
 		captureWorktreeHandoff,
 		persistWorktreeResult,

@@ -906,6 +906,44 @@ test("injected worktree finalization precedes delivery and preserves inspection/
 		}
 	}));
 
+test("a seeding warning or failure rides the launch record and never fails the launch", (t) =>
+	fixture(async (f) => {
+		if (skipWorktreesOnWindows(t)) return;
+		initializeWorktreeFixture(f.dir);
+		const worktreeOps = createWorktreeOperations();
+		let mode: "warn" | "throw" = "warn";
+		worktreeOps.seedProjectPackages = async (sourceCwd, worktreePath) => {
+			assert.equal(sourceCwd, f.dir);
+			assert.equal(worktreePath, f.dir);
+			if (mode === "throw") throw new Error("disk exploded");
+			return ["Project package seeding failed for .pi/npm: no space"];
+		};
+		f.options.infrastructure!.worktreeOperations = worktreeOps;
+		const session = runtime.createDefaultRunSession(f.options);
+		try {
+			for (const [branch, expected] of [
+				["warned", /no space/],
+				["thrown", /Project package seeding failed: disk exploded/],
+			] as const) {
+				mode = branch === "warned" ? "warn" : "throw";
+				const pane = f.provider.createSurface({ name: branch, cwd: f.dir });
+				f.operations.createWorktree = (_name, _cwd, name) => ({
+					path: f.dir,
+					branch: name,
+					workspaceId: `workspace-${name}`,
+					paneId: pane,
+				});
+				const input = f.input(`seed-${branch}`);
+				input.task.worktree = { branch };
+				await session.spawnPi(input);
+				const record = session.getRecord(input.task.id)!;
+				assert.match(record.worktree?.diagnostics?.join("\n") ?? "", expected);
+			}
+		} finally {
+			await session.shutdown("quit");
+		}
+	}));
+
 test("Pi composition consumes real launch metadata, retires live getters and rejects consumed IDs", () =>
 	fixture(async (f) => {
 		const input = f.input();

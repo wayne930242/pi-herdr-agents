@@ -57,7 +57,8 @@ Fakes are for conformance tests only.
 - `maestro/core/deadline.ts` defines finite monotonic operation budgets.
   `maestro/surfaces/herdr/herdr-cli.ts` owns bounded asynchronous Herdr clients.
   `maestro/runtime/worktree-operations.ts` owns asynchronous Git preflight and
-  handoff inspection. Explicit cleanup Git commands remain bounded and synchronous.
+  handoff inspection and the bounded seeding of installed `.pi/npm` and `.pi/git`
+  project packages into a new worktree. Explicit cleanup Git commands remain bounded and synchronous.
 - `maestro/core/host-text.ts` — the one encoding for variable values in
   parent-facing host lines, lossless command-argument serializers, and display
   normalization for child text.

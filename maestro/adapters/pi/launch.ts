@@ -607,6 +607,18 @@ async function prepareLaunchSurface(
 	};
 	if (created.diagnostics?.length) worktree.diagnostics = created.diagnostics;
 	try {
+		const seedWarnings = await worktreeOps.seedProjectPackages(
+			resolved.sourceCwd,
+			created.path,
+		);
+		if (seedWarnings.length)
+			(worktree.diagnostics ??= []).push(...seedWarnings);
+	} catch (error) {
+		(worktree.diagnostics ??= []).push(
+			`Project package seeding failed: ${errorMessage(error)}`,
+		);
+	}
+	try {
 		worktreeOps.writeWorktreeManifest(manifestFile, {
 			state: "provisioned",
 			...ownership,

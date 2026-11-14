@@ -85,6 +85,11 @@ export function worktreeResultState(
 export interface WorktreeOperations {
 	resolveGitCommit(cwd: string, ref: string): Promise<string>;
 	resolveWorktreeProvisionCwd(sourceCwd: string): Promise<string>;
+	/** Copies the source's installed project packages into a new worktree; returns non-fatal warnings and never throws. */
+	seedProjectPackages(
+		sourceCwd: string,
+		worktreePath: string,
+	): Promise<string[]>;
 	writeWorktreeManifest(path: string, value: JsonObject): void;
 	captureWorktreeHandoff(worktree: WorktreeLaunch): Promise<WorktreeHandoff>;
 	persistWorktreeResult(
