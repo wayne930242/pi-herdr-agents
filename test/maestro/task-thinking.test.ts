@@ -80,6 +80,10 @@ describe("task-category thinking", () => {
 			buildSubagentRoutingGuidelines("catalog", tasks).join("\n"),
 			/Omit thinking on task:<category> only when that category has configured thinking/,
 		);
+		assert.match(
+			buildSubagentRoutingGuidelines("catalog", tasks).join("\n"),
+			/or when you pass solutionSpace, from which an installed extension may set the child's level/,
+		);
 	});
 
 	it("escapes saved model refs instead of injecting extra catalog lines", () => {
