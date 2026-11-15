@@ -110,6 +110,14 @@ exact IDs from your authenticated model catalog:
       "architecture": ["your-provider/your-architecture-model"],
       "docs": ["your-provider/your-docs-model"]
     },
+    "tasksThinking": {
+      "coding": "high",
+      "review": "high",
+      "recon": "low",
+      "qa": "medium",
+      "architecture": "xhigh",
+      "docs": "medium"
+    },
     "tasksMeta": {
       "generatedAt": "2026-09-17T00:00:00Z",
       "method": "research"
@@ -117,6 +125,16 @@ exact IDs from your authenticated model catalog:
   }
 }
 ```
+
+`models.tasksThinking` is an optional map from the same six categories to Pi
+thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
+The name parallels `models.tasks`; it is separate from the ordered candidate lists
+so older configs and callers remain valid. Absent entries use role thinking,
+then parent thinking. For `task:<category>` launches, precedence is explicit
+`thinking` → category thinking → role thinking → parent thinking. Category and
+parent thinking clamp to each candidate's supported range; explicit and role
+thinking must be supported and otherwise fail. Plans record category thinking
+as source `task`, with a `task-clamp` adjustment when changed.
 
 `models.tasks` candidates are ordered exact authenticated IDs. Use
 `task:<category>` only in the `subagent` tool's `model` argument; it is not
@@ -174,7 +192,9 @@ revision of the exact config bytes that supplied the saved preferences. Init
 does not start while a turn runs or messages are queued, and an empty registry
 ends with a notice instead of a prompt. Neither case writes anything.
 
-The draft considers current saved task, default, and per-agent preferences.
+Init requires a dialog-capable UI before it starts. The direct-writer draft
+includes category thinking and considers current saved task, thinking,
+default, and per-agent preferences.
 Optional command arguments set ranking preferences. Otherwise it favors
 capability for substantive work and efficiency for bounded reconnaissance and
 test execution. Categories describe work, not complexity tiers:
@@ -206,7 +226,11 @@ While init runs, it emits `pi-herdr-subagents:task-models:init:approval:v1`.
 With no offer, the prompt directs the model to `subagents_write_task_models`
 with `expectedConfigRevision`. When exactly one loaded extension offers, init
 opens that extension's flow, and the extension's instructions replace the
-writer instruction; the extension then owns approval and the write. Two or more
+writer instruction. The legacy event protocol is retained, but pi-herdr-pstack
+0.6.0 cannot read a nonempty `models.tasksThinking` map or submit thinking.
+Only the direct-writer destination requests a thinking draft. Model-only writes
+do not add an empty map; configuring nonempty thinking requires a compatible pack. Any eventual host writer call still
+shows its own mandatory approval; the event cannot authorize or bypass it. Two or more
 offers, or an invalid one, stop init before any extension opens or a prompt is
 sent. Once an offer is recorded, a refusal or failure also stops init: it never
 falls back to the direct writer. See [Task-model init events](#task-model-init-events).
@@ -220,11 +244,34 @@ restored by a reload or resume. A failed write leaves it active for a retry.
 An init that does not start undoes only its own activation. Another extension's
 approval flow never activates the writer.
 
-The writer validates and atomically replaces `models.tasks` and `tasksMeta`,
-preserving unrelated settings. Its tool schema accepts partial nonempty
+Every valid proposal uses a compact `ctx.ui.select`: only changed categories,
+one line each, with exact ordered models and thinking before/after, a count of
+unchanged categories, and any metadata change. Values are normalized and
+JSON-escaped, including invisible format/default-ignorable characters, never
+abbreviated; `null` means not configured. The first/default option is **No, keep
+current**; only **Yes, save** approves. Enter alone therefore refuses even if a
+small pane clips the diff. The timeout remains 60 seconds. Only one approval
+may be open in the process; a second writer call refuses immediately. Ranking
+basis is summarized by kind as submitted/unverified; research sources and their
+influence appear in the tool result, not the dialog. The basis is not saved.
+Missing thinking uses role, then parent; category thinking clamps at launch.
+Only an affirmative approval writes. Decline, Escape/cancellation, timeout,
+print/JSON mode, or unavailable UI writes nothing and returns a refusal. Parent
+TUI and dialog-capable RPC sessions use the same prompt. Child sessions have no
+writer tool, and a captured writer also refuses in child context. Earlier
+approval in any package never skips the host dialog, even for identical writes.
+An init draft goes through this same writer prompt; refusal stops the write.
+
+The writer validates and atomically replaces `models.tasks`, category thinking,
+and `tasksMeta`, preserving unrelated settings. Its tool schema accepts partial nonempty
 categories (omitted categories are removed), rejects empty `tasks: {}` input,
 and rejects exact duplicate refs within a category after trimming;
-IDs remain case-sensitive. Its result includes normalized saved `tasks`,
+IDs remain case-sensitive. Optional `tasksThinking` replaces the thinking map
+(`{}` clears and removes the key; empty maps are never persisted). Omitting it
+or passing `null` preserves thinking for retained categories; removed categories
+lose their thinking. Thinking entries without a corresponding submitted task
+category are rejected. Models and thinking share one atomic, revision-checked
+write. Its result includes normalized saved `tasks`, optional `tasksThinking`,
 `tasksMeta`, `configPath`, `missingCategories`, and `configRevision`. Init requests all six categories
 and a before/after table based on that saved result, not the unsaved draft, and
 must explain missing categories or changed choices.
@@ -236,8 +283,8 @@ writing, returns it in the result, and never saves it; only `tasksMeta.method`
 persists. Calls without `basis`, including research calls, keep the earlier
 contract.
 
-Optional `expectedConfigRevision` makes a write conditional on the config the
-proposal was read from. A revision is `sha256:` followed by 64 lowercase hex
+Optional `expectedConfigRevision` binds the proposal to the config it was read
+from, checked before showing approval. A revision is `sha256:` followed by 64 lowercase hex
 digits of the SHA-256 of the exact `config.json` bytes (not normalized JSON or
 only `models.tasks`), or the literal `missing` when the file is absent. Any byte
 change, including whitespace or unrelated settings, makes the revision stale; a
@@ -245,22 +292,42 @@ change, including whitespace or unrelated settings, makes the revision stale; a
 rejects a file that was removed. A stale revision fails with `Stale task model
 config revision` without replacing configuration: re-read, re-propose, and
 re-approve rather than retrying. Malformed revisions, including `null` and empty
-strings, fail closed. Omitting the field keeps the unconditional write. A write
-to a missing file still seeds from the packaged `config.json.example`.
-`configRevision` is the revision of the exact bytes written and can serve as the
-next precondition.
+strings, fail closed. Omitting the field proposes against the current config;
+it never skips approval. Every approved write also binds the exact config bytes
+behind the displayed preferences and re-checks them under the write lock. Changes during approval
+are rejected, including unrelated settings and whitespace. Re-read, re-propose
+and obtain fresh approval. The complete replacement bytes are computed before
+the selector and compared again before publication. A missing config is seeded
+only with required `status.enabled: true` and the proposed `models`, not the
+packaged example. This avoids silently adding model defaults, agent overrides,
+or spawning settings. The selector states that a new file will be created,
+lists every top-level key, and discloses the status setting beyond the task rows.
+Symlinked directories are supported: the selector shows the resolved real path
+when it differs, and that directory is rechecked under the advisory lock and
+immediately before rename. Writes target the approved real directory.
+`configRevision` is re-read after publication and can serve as the next precondition.
+Failures after approval re-read the file and report whether it is unchanged,
+matches the approved replacement, or has an unknown replacement state.
 
-Every writer call, conditional or not, holds an exclusive `config.json.lock`
-sibling while it reads one snapshot, checks the revision, and atomically renames
-a private temporary file into place. A held lock fails immediately with `Task
+After approval, cooperating writers use an exclusive `config.json.lock`
+sibling, check the snapshot and replacement bytes, and atomically rename a
+private temporary file. A held lock fails immediately with `Task
 model config writer busy`; there are no waits or retries. The lock is never
 broken automatically: after a crash, the error names the recorded owner and
 reports when that process is no longer running, and you remove the lock only
 after confirming that no writer is active. Each call removes only its own lock
 and temporary file. This lock is advisory: it serializes cooperating writers
 but cannot constrain a text editor or another process that ignores it. The
-revision check detects changes made before the snapshot is read; it is not a
+revision check detects changes through the re-read after approval; it is not a
 filesystem transaction against arbitrary external writers.
+
+Known limits: a non-cooperating process can unlink/recreate the advisory lock,
+so the host does not guarantee that it remains held throughout publication.
+Approval is not a filesystem authorization boundary. A reload can hide an open
+selector; hiding it is not approval and writes nothing. On shutdown or session
+replacement, the host aborts pending approval and releases its gate even if the
+hidden selector never resolves. Short/narrow panes can
+still clip unusually long changes; refusal is deliberately the default.
 
 ## Task routing
 
@@ -353,8 +420,15 @@ Two versioned `pi.events` channels let another extension take part in
 command's live `ExtensionCommandContext`, so they are for trusted extensions in
 the same process. The context is current only while the event is emitted.
 
-The host emits `pi-herdr-subagents:task-models:init:approval:v1` while init
-runs:
+The host keeps emitting `pi-herdr-subagents:task-models:init:approval:v1` while
+init runs for compatibility. This is a retained legacy pre-approval handoff,
+not a grant to write. Its collection, conflict, cancellation and destination
+semantics are unchanged. Old pi-herdr-pstack flows remain model-only and cannot
+read nonempty thinking until that pack migrates. They may temporarily show their approval before the host's
+mandatory writer approval. New integrations should let the host writer approve.
+No removal date is set.
+
+The event payload is:
 
 ```typescript
 type ApprovalRequest = {
@@ -374,7 +448,7 @@ type OpenResult =
 
 - Call `offer` synchronously, before the listener's first `await`. After `emit`
   returns, `offer` answers `"closed"` and records nothing.
-- Offer whenever your extension owns task-model approval, even when it is busy,
+- Existing approval integrations should still offer even when busy,
   and refuse from `open`. `owner` is one printable token without spaces.
 - The host opens nothing until collection ends. Two offers (even with the same
   owner) or an invalid offer stop init. With one offer, the host calls `open()`

@@ -11,8 +11,15 @@ import {
 	writeSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
-import { isPlainObject, isString } from "./type-guards.ts";
+import { basename, dirname, join, resolve } from "node:path";
+import { realpathWithoutOpening } from "../realpath-without-opening.ts";
+import {
+	isPlainObject,
+	isRecord,
+	isString,
+	type JsonObject,
+} from "./type-guards.ts";
+import { isThinkingLevel, THINKING_LEVELS } from "../routing.ts";
 
 import {
 	type RankingBasis,
@@ -21,12 +28,14 @@ import {
 	type TaskCategory,
 	type TaskPreferences,
 	type TaskPreferencesMeta,
+	type TaskThinkingPreferences,
 } from "./task-model-types.ts";
 
 export interface ModelConfig {
 	default?: string;
 	agents: Record<string, string>;
 	tasks?: TaskPreferences;
+	tasksThinking?: TaskThinkingPreferences;
 	tasksMeta?: TaskPreferencesMeta;
 }
 
@@ -95,6 +104,32 @@ function parseTasks(value: any, source: string): TaskPreferences | undefined {
 	return tasks;
 }
 
+function parseTasksThinking(
+	value: any,
+	source: string,
+): TaskThinkingPreferences | undefined {
+	if (value == null) return undefined;
+	if (!isPlainObject(value))
+		invalidModelConfig(source, "models.tasksThinking must be an object");
+	const thinking: TaskThinkingPreferences = {};
+	for (const [category, level] of Object.entries(value)) {
+		// SAFETY: category membership is checked before indexing the typed map.
+		if (!TASK_CATEGORIES.includes(category as TaskCategory))
+			invalidModelConfig(
+				source,
+				`models.tasksThinking.${category} is unsupported; supported categories: ${TASK_CATEGORIES.join(", ")}`,
+			);
+		if (!isString(level) || !isThinkingLevel(level))
+			invalidModelConfig(
+				source,
+				`models.tasksThinking.${category} must be one of: ${THINKING_LEVELS.join(", ")}`,
+			);
+		// SAFETY: the fixed category check above rejects unknown keys.
+		thinking[category as TaskCategory] = level;
+	}
+	return thinking;
+}
+
 function parseTasksMeta(
 	value: any,
 	source: string,
@@ -142,7 +177,13 @@ export function parseModelConfig(
 	if (models == null) return { agents: {} };
 	if (!isPlainObject(models))
 		invalidModelConfig(source, "models must be an object");
-	const allowedKeys = new Set(["default", "agents", "tasks", "tasksMeta"]);
+	const allowedKeys = new Set([
+		"default",
+		"agents",
+		"tasks",
+		"tasksThinking",
+		"tasksMeta",
+	]);
 	const unsupportedKeys = Object.keys(models).filter(
 		(key) => !allowedKeys.has(key),
 	);
@@ -181,10 +222,12 @@ export function parseModelConfig(
 		}
 	}
 	const tasks = parseTasks(models.tasks, source);
+	const tasksThinking = parseTasksThinking(models.tasksThinking, source);
 	const tasksMeta = parseTasksMeta(models.tasksMeta, source);
 	const config: ModelConfig = { agents };
 	if (defaultModel) config.default = defaultModel;
 	if (tasks) config.tasks = tasks;
+	if (tasksThinking) config.tasksThinking = tasksThinking;
 	if (tasksMeta) config.tasksMeta = tasksMeta;
 	return config;
 }
@@ -296,6 +339,7 @@ export function parseRankingBasis(
 export interface SavedTaskModelConfig {
 	configPath: string;
 	tasks: TaskPreferences;
+	tasksThinking?: TaskThinkingPreferences;
 	tasksMeta: TaskPreferencesMeta | undefined;
 	missingCategories: TaskCategory[];
 	/** Revision of the exact bytes this call published. */
@@ -339,6 +383,10 @@ export class TaskModelConfigWriteError extends Error {
 }
 
 export interface WriteTaskModelConfigOptions {
+	/** Replaces category thinking when supplied; omitted preserves it for retained categories. */
+	tasksThinking?: TaskThinkingPreferences | null;
+	/** Exact precomputed replacement and real directory shown for approval. */
+	approvedWrite?: PreparedTaskModelWrite;
 	/**
 	 * Exact-byte revision the caller proposed against. Omitted keeps the
 	 * unconditional write; `missing` requires the file to be absent.
@@ -350,108 +398,295 @@ export interface WriteTaskModelConfigOptions {
 	>;
 }
 
-/**
- * Atomically replace only models.tasks and models.tasksMeta in the durable user config.
- *
- * Every call holds an exclusive sibling lock file while it reads one snapshot,
- * checks the optional revision precondition, and renames a private temporary file
- * into place. The lock is advisory: it serializes cooperating writers only and
- * cannot constrain editors or processes that ignore it. Contention and stale locks
- * fail closed without waiting or breaking another owner's lock.
- */
-export function writeTaskModelConfig(
+/** Normalize and validate a proposal without creating files or acquiring a lock. */
+export function validateTaskModelProposal(
 	configPath: string,
-	examplePath: string,
 	tasks: TaskPreferences,
 	tasksMeta: TaskPreferencesMeta,
 	isAuthenticatedCandidate: (candidate: string) => boolean,
 	options: WriteTaskModelConfigOptions = {},
-): SavedTaskModelConfig {
-	const expected = options.expectedConfigRevision;
-	if (expected !== undefined && !isConfigRevision(expected)) {
+): ModelConfig {
+	if (
+		options.expectedConfigRevision !== undefined &&
+		!isConfigRevision(options.expectedConfigRevision)
+	) {
 		throw new TaskModelConfigWriteError(
 			"invalid-revision",
 			`Invalid expectedConfigRevision: use "sha256:" followed by 64 lowercase hex digits of the exact config bytes, or "${MISSING_CONFIG_REVISION}" when the config file is absent. Omit it only for an unconditional write.`,
 		);
 	}
+	const candidate = parseModelConfig(
+		{ models: { tasks, tasksThinking: options.tasksThinking, tasksMeta } },
+		configPath,
+	);
+	for (const category of Object.keys(candidate.tasksThinking ?? {})) {
+		if (!Object.hasOwn(candidate.tasks ?? {}, category))
+			invalidModelConfig(
+				configPath,
+				`models.tasksThinking.${category} has no submitted task category`,
+			);
+	}
+	for (const candidates of Object.values(candidate.tasks ?? {})) {
+		for (const ref of candidates) {
+			if (!isAuthenticatedCandidate(ref))
+				throw new Error(
+					`Task model candidate ${JSON.stringify(ref)} is not an authenticated exact registry model`,
+				);
+		}
+	}
+	return candidate;
+}
+
+/** Check the proposal's revision before approval and again under the write lock. */
+export function assertTaskModelConfigRevision(
+	configPath: string,
+	expected: string | undefined,
+	actual: string,
+): void {
+	if (expected === undefined || actual === expected) return;
+	let state = "the config file bytes changed since the proposal was read";
+	if (expected === MISSING_CONFIG_REVISION)
+		state = "the proposal expected no config file, but one now exists";
+	else if (actual === MISSING_CONFIG_REVISION)
+		state =
+			"the proposal expected an existing config file, but it is now missing";
+	throw new TaskModelConfigWriteError(
+		"stale-revision",
+		`Stale task model config revision for ${configPath}: ${state}. Configuration was not replaced. Re-read the config, prepare a fresh proposal, and obtain fresh approval before writing.`,
+	);
+}
+
+/** Legacy callers preserve thinking only for task categories they retain. */
+export function resolveTaskThinkingPreferences(
+	tasks: TaskPreferences | undefined,
+	requested: TaskThinkingPreferences | undefined,
+	previous: TaskThinkingPreferences | undefined,
+): TaskThinkingPreferences | undefined {
+	const selected = requested ?? previous;
+	if (!selected) return undefined;
+	const retained: TaskThinkingPreferences = {};
+	for (const category of TASK_CATEGORIES) {
+		const level = selected[category];
+		if (tasks?.[category] && level !== undefined) retained[category] = level;
+	}
+	return Object.keys(retained).length > 0 ? retained : undefined;
+}
+
+export interface PreparedTaskModelWrite {
+	configPath: string;
+	realConfigPath: string;
+	realConfigDir: string;
+	configRevision: string;
+	before: ModelConfig;
+	after: ModelConfig;
+	output: string;
+	newFile: boolean;
+	topLevelKeys: string[];
+}
+
+/** Resolve existing symlinks without creating missing parent directories. */
+function resolveConfigDirectory(path: string): string {
+	try {
+		return realpathWithoutOpening(path);
+	} catch (error) {
+		// SAFETY: filesystem errors expose the Node errno code.
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		const parent = dirname(path);
+		if (parent === path) throw error;
+		return join(resolveConfigDirectory(parent), basename(path));
+	}
+}
+
+function assertApprovedDirectory(
+	configPath: string,
+	approved: PreparedTaskModelWrite,
+): void {
+	if (
+		resolveConfigDirectory(dirname(resolve(configPath))) !==
+		approved.realConfigDir
+	)
+		throw new Error(
+			"Task model config directory changed after approval. Configuration was not replaced; obtain fresh approval.",
+		);
+}
+
+function parseTaskModelDocument(
+	source: string,
+	configPath: string,
+): JsonObject {
+	let parsed: any;
+	try {
+		parsed = JSON.parse(source);
+	} catch (error) {
+		throw new Error(
+			`Invalid JSON in subagent config ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (!isPlainObject(parsed))
+		throw new Error(
+			`Invalid JSON in subagent config ${configPath}: root must be an object`,
+		);
+	return parsed;
+}
+
+function taskModelOutput(
+	configPath: string,
+	bytes: Buffer | undefined,
+	candidate: ModelConfig,
+): string {
+	const parsed: JsonObject =
+		bytes == null
+			? { status: { enabled: true } }
+			: parseTaskModelDocument(bytes.toString("utf8"), configPath);
+	const models = isRecord(parsed.models) ? { ...parsed.models } : {};
+	const retained = resolveTaskThinkingPreferences(
+		candidate.tasks,
+		candidate.tasksThinking,
+		candidate.tasksThinking === undefined
+			? parseTasksThinking(models.tasksThinking, configPath)
+			: undefined,
+	);
+	if (retained) models.tasksThinking = retained;
+	else delete models.tasksThinking;
+	models.tasks = candidate.tasks;
+	models.tasksMeta = candidate.tasksMeta
+		? { ...candidate.tasksMeta }
+		: undefined;
+	return JSON.stringify({ ...parsed, models }, null, 2) + "\n";
+}
+
+/** Read and compute every byte before approval, including the minimal new-file seed. */
+export function prepareTaskModelWrite(
+	configPath: string,
+	candidate: ModelConfig,
+	expectedConfigRevision?: string,
+): PreparedTaskModelWrite {
+	const realConfigDir = resolveConfigDirectory(dirname(resolve(configPath)));
+	const realConfigPath = join(realConfigDir, basename(configPath));
+	const bytes = readBytesIfExists(realConfigPath);
+	const configRevision =
+		bytes == null ? MISSING_CONFIG_REVISION : computeConfigRevision(bytes);
+	assertTaskModelConfigRevision(
+		configPath,
+		expectedConfigRevision,
+		configRevision,
+	);
+	const output = taskModelOutput(configPath, bytes, candidate);
+	const parsed = parseTaskModelDocument(output, configPath);
+	return {
+		configPath,
+		realConfigDir,
+		realConfigPath,
+		configRevision,
+		output,
+		before:
+			bytes == null
+				? { agents: {} }
+				: parseModelConfig(
+						parseTaskModelDocument(bytes.toString("utf8"), configPath),
+						configPath,
+					),
+		after: parseModelConfig(parsed, configPath),
+		newFile: bytes == null,
+		topLevelKeys: Object.keys(parsed),
+	};
+}
+
+/** Best-effort re-read after an approved write throws; never infer that failure means no publication. */
+export function describeTaskModelWriteFailure(
+	approved: PreparedTaskModelWrite,
+): string {
+	try {
+		const current = readConfigRevision(approved.realConfigPath);
+		if (current === computeConfigRevision(Buffer.from(approved.output)))
+			return "Configuration matches the approved replacement (verified by re-read).";
+		if (current === approved.configRevision)
+			return "Configuration was not replaced (verified unchanged by re-read).";
+		return `Configuration changed to revision ${current}; replacement by this call is unknown.`;
+	} catch {
+		return "Configuration replacement is unknown: the file could not be re-read.";
+	}
+}
+
+/**
+ * Atomically replace models.tasks, category thinking and models.tasksMeta in the durable user config.
+ * `_examplePath` is retained for positional compatibility only; missing files
+ * receive the minimal required status setting and proposed models, never an example seed.
+ *
+ * Cooperating calls use an exclusive sibling lock around snapshot validation
+ * and temporary-file publication. Non-cooperating processes can unlink it, so
+ * continued ownership is not guaranteed. It serializes cooperating writers only and
+ * cannot constrain editors or processes that ignore it. Contention and stale locks
+ * fail closed without waiting or breaking another owner's lock.
+ */
+export function writeTaskModelConfig(
+	configPath: string,
+	_examplePath: string,
+	tasks: TaskPreferences,
+	tasksMeta: TaskPreferencesMeta,
+	isAuthenticatedCandidate: (candidate: string) => boolean,
+	options: WriteTaskModelConfigOptions = {},
+): SavedTaskModelConfig {
+	const expected =
+		options.expectedConfigRevision ?? options.approvedWrite?.configRevision;
+	const candidateConfig = validateTaskModelProposal(
+		configPath,
+		tasks,
+		tasksMeta,
+		isAuthenticatedCandidate,
+		options,
+	);
 	const fileOperations = options.fileOperations ?? {
 		renameSync,
 		writeFileSync,
 	};
-	const candidateConfig = parseModelConfig(
-		{ models: { tasks, tasksMeta } },
-		configPath,
-	);
-	for (const candidates of Object.values(candidateConfig.tasks ?? {})) {
-		for (const candidate of candidates) {
-			if (!isAuthenticatedCandidate(candidate)) {
-				throw new Error(
-					`Task model candidate ${JSON.stringify(candidate)} is not an authenticated exact registry model`,
-				);
-			}
-		}
-	}
-	mkdirSync(dirname(configPath), { recursive: true });
-	return withConfigWriteLock(configPath, () => {
-		const currentBytes = readBytesIfExists(configPath);
-		if (expected !== undefined) {
-			const actual =
-				currentBytes == null
-					? MISSING_CONFIG_REVISION
-					: computeConfigRevision(currentBytes);
-			if (actual !== expected) {
-				let state = "the config file bytes changed since the proposal was read";
-				if (expected === MISSING_CONFIG_REVISION)
-					state = "the proposal expected no config file, but one now exists";
-				else if (currentBytes == null)
-					state =
-						"the proposal expected an existing config file, but it is now missing";
-				throw new TaskModelConfigWriteError(
-					"stale-revision",
-					`Stale task model config revision for ${configPath}: ${state}. Configuration was not replaced. Re-read the config, prepare a fresh proposal, and obtain fresh approval before writing.`,
-				);
-			}
-		}
-		const current = currentBytes?.toString("utf8");
-		const source = current ?? readFileSync(examplePath, "utf8");
-		let parsed: any;
-		try {
-			parsed = JSON.parse(source);
-		} catch (error) {
-			const path = current == null ? examplePath : configPath;
+	const approved = options.approvedWrite;
+	const targetPath = approved?.realConfigPath ?? configPath;
+	if (approved) assertApprovedDirectory(configPath, approved);
+	mkdirSync(dirname(targetPath), { recursive: true });
+	return withConfigWriteLock(targetPath, () => {
+		if (approved) assertApprovedDirectory(configPath, approved);
+		const currentBytes = readBytesIfExists(targetPath);
+		assertTaskModelConfigRevision(
+			configPath,
+			expected,
+			currentBytes == null
+				? MISSING_CONFIG_REVISION
+				: computeConfigRevision(currentBytes),
+		);
+		const output = taskModelOutput(configPath, currentBytes, candidateConfig);
+		if (approved && output !== approved.output)
 			throw new Error(
-				`Invalid JSON in subagent config ${path}: ${error instanceof Error ? error.message : String(error)}`,
+				"Task model replacement bytes differ from the approved proposal. Configuration was not replaced; obtain fresh approval.",
 			);
-		}
-		if (!isPlainObject(parsed))
-			throw new Error(
-				`Invalid JSON in subagent config ${configPath}: root must be an object`,
-			);
-		const models = isPlainObject(parsed.models) ? { ...parsed.models } : {};
-		models.tasks = candidateConfig.tasks;
-		models.tasksMeta = candidateConfig.tasksMeta;
-		const output = JSON.stringify({ ...parsed, models }, null, 2) + "\n";
+		const retainedThinking = parseModelConfig(
+			parseTaskModelDocument(output, configPath),
+			configPath,
+		).tasksThinking;
 		const temporary = join(
-			dirname(configPath),
+			dirname(targetPath),
 			`.${Date.now()}-${process.pid}-${randomUUID()}-config.tmp`,
 		);
 		let published = false;
 		try {
 			fileOperations.writeFileSync(temporary, output, { flag: "wx" });
-			fileOperations.renameSync(temporary, configPath);
+			if (approved) assertApprovedDirectory(configPath, approved);
+			fileOperations.renameSync(temporary, targetPath);
 			published = true;
 		} finally {
 			if (!published) rmSync(temporary, { force: true });
 		}
-		return {
+		const saved: SavedTaskModelConfig = {
 			configPath,
 			tasks: candidateConfig.tasks ?? {},
 			tasksMeta: candidateConfig.tasksMeta,
 			missingCategories: TASK_CATEGORIES.filter(
 				(category) => !candidateConfig.tasks?.[category],
 			),
-			configRevision: computeConfigRevision(Buffer.from(output, "utf8")),
+			configRevision: readConfigRevision(targetPath),
 		};
+		if (retainedThinking) saved.tasksThinking = retainedThinking;
+		return saved;
 	});
 }
 

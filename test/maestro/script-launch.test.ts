@@ -10,7 +10,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
 	createPiScriptShellResolver,
@@ -35,6 +36,10 @@ import { createLaunchPlanner } from "../../pi-extension/subagents/launch.ts";
 import { __herdrTest__ } from "../../maestro/surfaces/herdr/herdr.ts";
 import { HerdrSurfaceProvider } from "../../maestro/surfaces/herdr/herdr-surface-provider.ts";
 import { runScriptInPane } from "../../maestro/surfaces/herdr/terminal.ts";
+
+/** A path is literal text in an expected pattern: `\\` and `.` must not be syntax. */
+const escapeRegExp = (value: string) =>
+	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
 const CJK_BASH = "D:\\工具 箱\\王小明's Git\\bin\\bash.exe";
@@ -442,12 +447,16 @@ async function withFakeHerdr<T>(
 	run: (herdr: FakeHerdr) => Promise<T>,
 ): Promise<T> {
 	const dir = mkdtempSync(join(tmpdir(), "script-launch-"));
-	const bin = join(dir, "herdr");
+	// Some tests stub process.platform to "win32" before this runs. The host
+	// then looks for herdr.exe on a ';'-split PATH, so the fake has to follow
+	// whatever platform the host will see, not the one the test runs on.
+	const windows = process.platform === "win32";
+	const bin = join(dir, windows ? "herdr.exe" : "herdr");
 	writeFileSync(bin, "#!/bin/sh\nexit 0\n");
 	chmodSync(bin, 0o755);
 	const saved = { env: process.env.HERDR_ENV, path: process.env.PATH };
 	process.env.HERDR_ENV = "1";
-	process.env.PATH = `${dir}${delimiter}${saved.path ?? ""}`;
+	process.env.PATH = `${dir}${windows ? win32.delimiter : delimiter}${saved.path ?? ""}`;
 	const herdr: FakeHerdr = { runCommands: [], processInfoCalls: 0 };
 	try {
 		return await __herdrTest__.withMockHerdrExec(
@@ -685,7 +694,7 @@ describe("launch composition on Windows", () => {
 			const line = await typedLine(
 				snapshot({ scriptShell: { cwd: project, projectTrusted: true } }),
 			);
-			assert.match(line, new RegExp(`^& '${projectBash}' `));
+			assert.match(line, new RegExp(`^& '${escapeRegExp(projectBash)}' `));
 		});
 	});
 
@@ -703,7 +712,7 @@ describe("launch composition on Windows", () => {
 				}),
 			]) {
 				const line = await typedLine(launch);
-				assert.match(line, new RegExp(`^& '${globalBash}' `));
+				assert.match(line, new RegExp(`^& '${escapeRegExp(globalBash)}' `));
 				assert.doesNotMatch(line, /project-bash/);
 			}
 		});
@@ -745,10 +754,9 @@ describe("launch composition on Windows", () => {
 				});
 				const session = createDefaultRunSession({
 					configDir: dir,
-					configExamplePath: new URL(
-						"../../config.json.example",
-						import.meta.url,
-					).pathname,
+					configExamplePath: fileURLToPath(
+						new URL("../../config.json.example", import.meta.url),
+					),
 					forcePolling: false,
 					roles: [],
 					getLaunchSnapshot: () =>
@@ -778,7 +786,10 @@ describe("launch composition on Windows", () => {
 								(error: Error) => error.message,
 							);
 						assert.equal(runCommands.length, 1, String(outcome));
-						assert.match(runCommands[0]!, new RegExp(`^& '${projectBash}' `));
+						assert.match(
+							runCommands[0]!,
+							new RegExp(`^& '${escapeRegExp(projectBash)}' `),
+						);
 					},
 				);
 			} finally {

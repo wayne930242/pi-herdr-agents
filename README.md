@@ -155,7 +155,7 @@ The parent session gets these tools:
 | `subagents_list` | List agent definitions, live specialists, and the supervision mode. |
 | `worktree_list` | List managed worktrees and what blocks their cleanup. |
 | `worktree_remove` | Remove one managed worktree on explicit request. |
-| `subagents_write_task_models` | Internal writer for `models.tasks` preferences. Inactive until `/subagents-init` needs it. |
+| `subagents_write_task_models` | Writer for task models and thinking. Every write asks for user approval; inactive until `/subagents-init` needs it. |
 
 The routine tools above load on demand. Their schemas and the `subagent` guidelines stay out of the prompt until the model loads them with Pi's built-in `tool_search`, which the host activates at session start. Without Pi's tool search, for example under `--no-extensions` or with `"-tool_search"` in the `defaultTools` setting, they are active from the start. A `--tools` allowlist, `--exclude-tools`, and a role's `deny-tools` still decide which of them exist. See [Tool loading](docs/tools.md#tool-loading).
 
@@ -168,7 +168,7 @@ Children get `caller_ping` to ask the parent for help. Interactive children also
 | `/subagents-init [preferences]` | Draft task-category model preferences from the live model registry. |
 | `/skill:pi-herdr-agents` | Load the host operating guide. |
 
-The main `subagent` parameters are `name`, `task`, `agent`, `model`, `thinking`, `fork`, `cwd`, `persistent`, `interactive`, `worktree`, and `accept`. Pass `accept: { run: "npm test" }` to have the child run your check before it finishes and retry on failure, then have the parent re-run it: every result carries a `Check:` verdict (`accepted`, `rejected`, `error`, `skipped`, or `none`), and only the parent's re-check decides it ([Accept checks](docs/tools.md#accept-checks)). See [Parameters](docs/tools.md#parameters) for every parameter, and [Tools and lifecycle reference](docs/tools.md) for the full behavior of each tool. Live tool descriptions and these documents are authoritative. The `pi-herdr-agents` skill is a general operating guide.
+The main `subagent` parameters are `name`, `task`, `agent`, `model`, `thinking`, `fork`, `cwd`, `persistent`, `notify`, `interactive`, `worktree`, and `accept`. Pass `accept: { run: "npm test" }` to have the child run your check before it finishes and retry on failure, then have the parent re-run it: every result carries a `Check:` verdict (`accepted`, `rejected`, `error`, `skipped`, or `none`), and only the parent's re-check decides it ([Accept checks](docs/tools.md#accept-checks)). See [Parameters](docs/tools.md#parameters) for every parameter, and [Tools and lifecycle reference](docs/tools.md) for the full behavior of each tool. Live tool descriptions and these documents are authoritative. The `pi-herdr-agents` skill is a general operating guide.
 
 ## Choose models
 
@@ -178,13 +178,15 @@ Set each child's exact authenticated `provider/model-id` and a supported thinkin
 - mid for ordinary implementation or review
 - frontier for architecture, security, hard diagnosis, or adversarial review
 
-Then set thinking within that model's range. Without `model`, a child uses agent frontmatter, then `models.agents.<name>`, then `models.default`, then the parent model. Without `thinking`, it uses the role's thinking level when set, otherwise the parent level.
+Then set thinking within that model's range. Without `model`, a child uses agent frontmatter, then `models.agents.<name>`, then `models.default`, then the parent model. Without `thinking`, a `task:<category>` launch uses `models.tasksThinking.<category>` when set, clamped to each candidate's supported range, then the role's thinking, then the parent level. Explicit thinking overrides these defaults and must be supported.
 
-A `model` value can also be an ordered fallback list, such as `provider/preferred, provider/fallback`, or a whole-value `task:<category>`. Task categories are `coding`, `complex-coding`, `review`, `recon`, `qa`, `architecture`, and `docs`. Their candidates come from `models.tasks` in `config.json`. Run `/subagents-init` to draft those preferences from your authenticated models, then `/reload`:
+A `model` value can also be an ordered fallback list, such as `provider/preferred, provider/fallback`, or a whole-value `task:<category>`. Task categories are `coding`, `complex-coding`, `review`, `recon`, `qa`, `architecture`, and `docs`. Their candidates come from `models.tasks` in `config.json`, with optional per-category thinking in `models.tasksThinking`. Run `/subagents-init` to draft those preferences from your authenticated models, then `/reload`:
 
 ```text
 /subagents-init Prefer capability over price for implementation; keep recon inexpensive
 ```
+
+Every task-preference write shows the exact before/after models and thinking and asks for approval in a compact, refusal-first selector (60-second timeout), including writes through `/subagents-init` or another package. Decline, cancellation, timeout, print/JSON, no-UI and child sessions write nothing. TUI and dialog-capable RPC parents can approve. Changes to the config during approval are rejected. New files disclose their minimal status/models seed; symlinked config directories show the real destination. Concurrent approval calls refuse rather than stack selectors.
 
 Ordinary non-persistent runs try later candidates after a safe launch failure or a provider or agent error, never after a completed negative result. An uncertain resource creation or command dispatch blocks fallback because another attempt could duplicate work. Persistent specialists do not advance after a running-child error. Worktrees use the first authenticated candidate only. A catalog-listed model can still be rejected by your provider account at request time.
 
@@ -204,7 +206,7 @@ Three tools end or pause work, and each does something different:
 
 A child that needs help calls `caller_ping`. An ordinary child exits, and you continue it with `subagent_resume({ sessionPath, message })`. A persistent specialist stays alive. Its help request ends the current task, and your `subagent_send` answer starts the next one. `subagent_resume` restores the child's launch tool policy and rejects managed-worktree sessions. Continue a worktree child in its retained workspace instead.
 
-Set `persistent: true` to keep one specialist session for sequential tasks. It accepts one task at a time and rejects sends while busy. `persistent.maxAgents` caps how many stay open (default `3`). Persistent sessions cannot be resumed.
+Set `persistent: true` to keep one specialist session for sequential tasks. It accepts one task at a time and rejects sends while busy. `persistent.maxAgents` caps how many stay open (default `3`). Persistent sessions cannot be resumed. Add `notify: true` to let a specialist that watches something wake you between tasks with `caller_notify`. Each notice starts a turn but is not a task result, and the parent delivers at most 50 per specialist, rate-limited ([Notices between tasks](docs/tools.md#notices-between-tasks)).
 
 Details: [Persistent specialists](docs/tools.md#persistent-specialists), [Interrupting](docs/tools.md#interrupting-a-running-subagent), [Cancelling](docs/tools.md#cancelling-a-running-subagent), and [`caller_ping`](docs/tools.md#caller_ping--child-to-parent-help-request).
 
@@ -306,7 +308,7 @@ The durable configuration file is `$PI_CODING_AGENT_DIR/herdr-agents/config.json
 | --- | --- | --- |
 | `herdr.backend` | `"auto"` | Select native-context Core or legacy Herdr; `"core"` and `"legacy"` are explicit overrides. |
 | `status.enabled` | `true` | The live subagent widget. This section is required. |
-| `models.default`, `models.agents`, `models.tasks` | none | Model defaults and task-category candidates. |
+| `models.default`, `models.agents`, `models.tasks`, `models.tasksThinking` | none | Model defaults, task-category candidates and thinking. |
 | `persistent.maxAgents` | `3` | How many persistent specialists can stay open. |
 | `spawning.maxDepth` | `3` | Deepest child any launch may create (parent is depth `0`); deeper launches are refused. |
 | `supervision.forcePolling`, `supervision.hangWarningMinutes` | `false`, `15` | Supervision transport and no-progress advisories. |

@@ -147,11 +147,10 @@ describe("task-model init composition", () => {
 		]);
 		assert.doesNotMatch(prompt, /secret-/);
 		// Golden SHA-256 of the accepted direct-writer prompt for these facts.
-		// Recaptured when init gained configRevision, basis guidance and
-		// replaceable destination instructions.
+		// Recaptured when basis guidance distinguished the compact dialog from the tool result.
 		assert.equal(
 			createHash("sha256").update(prompt).digest("hex"),
-			"00b09cd79ff41b04f17ff5106c89a71bb1eb4e7f1dd8b379228abadeef1971ea",
+			"ee1c2798118b09883d54d156a73eb21b9fd286de85c42b4ddaef5008c35bbd1e",
 		);
 		const unknown = initHost(() => ({
 			projectActiveRegistry: (project) =>
@@ -160,6 +159,33 @@ describe("task-model init composition", () => {
 		const json = JSON.parse(unknown.match(/```json\n([\s\S]*?)\n```/)![1]);
 		assert.equal(Object.hasOwn(json.models[0], "extensionRegistered"), false);
 		assert.deepEqual(json.models[0].auth, { configured: true });
+	});
+
+	it("describes a basis-kind summary in the dialog and research sources in the tool result", () => {
+		const { prompts } = initHost();
+		assert.match(
+			prompts[0],
+			/approval dialog summarizes the basis by kind as submitted, not independently verified/,
+		);
+		assert.match(
+			prompts[0],
+			/research sources and their influence appear in the tool result/,
+		);
+		assert.doesNotMatch(prompts[0], /The basis is shown as submitted/);
+	});
+
+	it("includes saved thinking in the brief and asks for a thinking draft", () => {
+		const { briefs, prompts } = initHost(() => ({
+			readConfig: () => ({
+				config: { agents: {}, tasksThinking: { coding: "high" } },
+				revision: REVISION,
+			}),
+		}));
+		assert.deepEqual(briefs[0].current.tasksThinking, { coding: "high" });
+		const json = JSON.parse(prompts[0].match(/```json\n([\s\S]*?)\n```/)![1]);
+		assert.deepEqual(json.current.tasksThinking, { coding: "high" });
+		assert.match(prompts[0], /Draft a tasksThinking map/);
+		assert.match(prompts[0], /reviewed draft as tasks and tasksThinking/);
 	});
 
 	it("reports an empty registry or an invalid config without asking anyone or prompting", () => {
@@ -207,6 +233,7 @@ describe("task-model init composition", () => {
 		assert.doesNotMatch(prompts[0], /call subagents_write_task_models/i);
 		assert.doesNotMatch(prompts[0], /normalized saved tasks/);
 		assert.match(prompts[0], /Submit the ranking basis/);
+		assert.doesNotMatch(prompts[0], /Draft a tasksThinking map/);
 	});
 
 	it("freezes the brief listeners see, so the prompt shows what they saw", () => {

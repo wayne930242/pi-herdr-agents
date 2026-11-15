@@ -36,11 +36,16 @@ import { FileWakeRegistry } from "../../maestro/core/wake.ts";
 import { SupervisionCoordinator } from "../../maestro/core/supervision.ts";
 import {
 	readSubagentSessionPolicy,
+	writeSubagentSessionPolicy,
 	appendPersistentTaskEvent,
 	consumePersistentTaskInbox,
 	readPersistentDeliveryLedger,
 } from "../../maestro/adapters/pi/session.ts";
 import type { SpawnOptions } from "../../maestro/core/harness-adapter.ts";
+
+/** A path is literal text in an expected pattern: `\\` and `.` must not be syntax. */
+const escapeRegExp = (value: string) =>
+	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const paneConfig = {
 	mode: "grouped",
@@ -279,6 +284,127 @@ describe("PiHarnessAdapter", () => {
 				);
 			}),
 	);
+	it("exports PI_SUBAGENT_SELF_SPAWN only for a named role that declared self-spawn and kept spawning", async () =>
+		usingFixture(async (f) => {
+			const commands: string[] = [];
+			f.operations.runScript = (_surface, command, options) => {
+				commands.push(command);
+				return options.scriptPath;
+			};
+			const launch = async (
+				defaults: NonNullable<SpawnOptions["role"]["defaults"]>,
+			) => {
+				await f.adapter.spawn({
+					...f.options,
+					role: { ...f.options.role, defaults },
+				});
+				return commands.at(-1) ?? "";
+			};
+			assert.match(
+				await launch({ autoExit: true }),
+				/PI_SUBAGENT_SELF_SPAWN=0/,
+			);
+			assert.match(
+				await launch({ autoExit: true, selfSpawn: false }),
+				/PI_SUBAGENT_SELF_SPAWN=0/,
+			);
+			const enabled = await launch({ autoExit: true, selfSpawn: true });
+			assert.match(enabled, /PI_SUBAGENT_AGENT='worker'/);
+			assert.match(enabled, /PI_SUBAGENT_SELF_SPAWN=1/);
+			assert.doesNotMatch(enabled, /PI_DENY_TOOLS/);
+
+			// `spawning: false` denies the spawning tools and wins over `self-spawn`.
+			const denied = await launch({
+				autoExit: true,
+				selfSpawn: true,
+				spawning: false,
+			});
+			assert.match(denied, /PI_SUBAGENT_SELF_SPAWN=0/);
+			assert.match(denied, /PI_DENY_TOOLS='subagent,/);
+		}));
+	it("restores PI_SUBAGENT_AGENT and self-spawn on resume from the saved policy", async () =>
+		usingFixture(async (f) => {
+			const commands: string[] = [];
+			f.operations.runScript = (_surface, command, options) => {
+				commands.push(command);
+				return options.scriptPath;
+			};
+			const h = await f.adapter.spawn({
+				...f.options,
+				role: {
+					...f.options.role,
+					defaults: { autoExit: true, selfSpawn: true },
+				},
+			});
+			assert.match(commands.at(-1) ?? "", /PI_SUBAGENT_AGENT='worker'/);
+			assert.match(commands.at(-1) ?? "", /PI_SUBAGENT_SELF_SPAWN=1/);
+			writeFileSync(
+				h.sessionId,
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: h.id,
+					cwd: f.root,
+				}) + "\n",
+			);
+			await f.adapter.kill(h);
+			await f.adapter.resume({ name: "resumed", sessionId: h.sessionId });
+			const resumed = commands.at(-1) ?? "";
+			assert.match(resumed, /PI_SUBAGENT_AGENT='worker'/);
+			assert.match(resumed, /PI_SUBAGENT_SELF_SPAWN=1/);
+		}));
+	it("resumes an old policy without agent or selfSpawn exactly as before", async () =>
+		usingFixture(async (f) => {
+			const commands: string[] = [];
+			f.operations.runScript = (_surface, command, options) => {
+				commands.push(command);
+				return options.scriptPath;
+			};
+			const h = await f.adapter.spawn({
+				...f.options,
+				role: {
+					...f.options.role,
+					defaults: { autoExit: true, selfSpawn: true },
+				},
+			});
+			writeFileSync(
+				h.sessionId,
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: h.id,
+					cwd: f.root,
+				}) + "\n",
+			);
+			const policy = readSubagentSessionPolicy(h.sessionId);
+			assert.equal(policy.version, 2);
+			if (policy.version !== 2) throw new Error("expected v2 policy");
+			writeSubagentSessionPolicy(h.sessionId, {
+				owner: policy.owner,
+				tools: policy.tools ?? undefined,
+				deniedTools: policy.deniedTools,
+				persistent: policy.persistent,
+				logicalId: policy.logicalId,
+				generationId: policy.generationId,
+			});
+			const rewritten = readSubagentSessionPolicy(h.sessionId);
+			assert.equal(
+				"agent" in rewritten,
+				false,
+				"old policy fixture must omit agent",
+			);
+			assert.equal(
+				"selfSpawn" in rewritten,
+				false,
+				"old policy fixture must omit selfSpawn",
+			);
+			await f.adapter.kill(h);
+			await f.adapter.resume({ name: "legacy", sessionId: h.sessionId });
+			const resumed = commands.at(-1) ?? "";
+			assert.doesNotMatch(resumed, /PI_SUBAGENT_AGENT=/);
+			assert.match(resumed, /PI_SUBAGENT_SELF_SPAWN=0/);
+			assert.doesNotMatch(resumed, /PI_SUBAGENT_SELF_SPAWN=1/);
+		}));
 	it("never lets pane-shell values for self-spawn or depth reach a child", async () =>
 		usingFixture(async (f) => {
 			const commands: string[] = [];
@@ -418,11 +544,15 @@ describe("PiHarnessAdapter", () => {
 			);
 			assert.match(
 				commands[1],
-				new RegExp(`PI_CODING_AGENT_DIR='${join(f.root, ".pi", "agent")}'`),
+				new RegExp(
+					`PI_CODING_AGENT_DIR='${escapeRegExp(join(f.root, ".pi", "agent"))}'`,
+				),
 			);
 			assert.match(
 				commands[2],
-				new RegExp(`PI_CODING_AGENT_DIR='${join(roleCwd, ".pi", "agent")}'`),
+				new RegExp(
+					`PI_CODING_AGENT_DIR='${escapeRegExp(join(roleCwd, ".pi", "agent"))}'`,
+				),
 			);
 		}));
 	it("launches the relocated protocol and maps the session handle", async () =>

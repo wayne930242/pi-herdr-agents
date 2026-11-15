@@ -11,13 +11,21 @@ import {
 	startTaskModelInit,
 	type TaskModelInitOutcome,
 } from "../../maestro/runtime/index.ts";
-import { parseExactModelRef } from "../../maestro/core/routing.ts";
+import {
+	THINKING_LEVELS,
+	parseExactModelRef,
+} from "../../maestro/core/routing.ts";
 import { wrapPiModelRegistry } from "./model-registry.ts";
 import {
 	MISSING_CONFIG_REVISION,
+	prepareTaskModelWrite,
+	describeTaskModelWriteFailure,
+	type PreparedTaskModelWrite,
+	validateTaskModelProposal,
 	parseRankingBasis,
 	readModelConfigSnapshot,
 	writeTaskModelConfig,
+	type WriteTaskModelConfigOptions,
 } from "../../maestro/core/config/model-config.ts";
 import {
 	DIRECT_WRITER_TOOL,
@@ -31,12 +39,15 @@ import {
 	TASK_CATEGORY_DESCRIPTIONS,
 	type TaskPreferences,
 	type TaskPreferencesMeta,
+	type TaskThinkingPreferences,
+	type RankingBasis,
 } from "../../maestro/core/config/task-model-types.ts";
 import {
 	getSubagentsConfigDir,
 	getSubagentsConfigExamplePath,
 	getSubagentsConfigPath,
 } from "./config-path.ts";
+import { readGlobalSlot, writeGlobalSlot } from "./state.ts";
 import { isFunction, isString } from "../../maestro/core/config/type-guards.ts";
 
 /**
@@ -88,17 +99,78 @@ function releaseWriterAfterInit(pi: ExtensionAPI): void {
 	);
 }
 
+// Unlike delivery summaries, approval values must never be abbreviated. JSON
+// escaping keeps controls and table separators visible without changing the data.
+type TaskApprovalValue =
+	| string
+	| string[]
+	| TaskPreferencesMeta
+	| RankingBasis
+	| undefined;
+function approvalJson(value: TaskApprovalValue): string {
+	return JSON.stringify(value ?? null).replace(
+		/[|\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]/gu,
+		(char) =>
+			char
+				.split("")
+				.map((unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`)
+				.join(""),
+	);
+}
+
+const TASK_MODEL_APPROVAL_SLOT = Symbol.for(
+	"pi-herdr-agents/task-model-approval-open",
+);
+const DECLINE_TASK_MODELS = "No, keep current";
+const SAVE_TASK_MODELS = "Yes, save";
+
+function taskModelApprovalMessage(prepared: PreparedTaskModelWrite): string {
+	const { before, after } = prepared;
+	const changes: string[] = [];
+	for (const category of TASK_CATEGORIES) {
+		const previous = `${approvalJson(before.tasks?.[category])} / ${approvalJson(before.tasksThinking?.[category])}`;
+		const next = `${approvalJson(after.tasks?.[category])} / ${approvalJson(after.tasksThinking?.[category])}`;
+		if (previous !== next) changes.push(`${category}: ${previous} -> ${next}`);
+	}
+	const lines = [`Save to ${approvalJson(prepared.configPath)}`];
+	if (prepared.realConfigPath !== prepared.configPath)
+		lines.push(`Real path: ${approvalJson(prepared.realConfigPath)}`);
+	if (prepared.newFile)
+		lines.push(
+			`Create new file; top-level keys: ${prepared.topLevelKeys.join(", ")}. Other settings: {"status":{"enabled":true}}.`,
+		);
+	lines.push(
+		"Models / thinking (null = unset):",
+		...changes,
+		`${TASK_CATEGORIES.length - changes.length} categories unchanged.`,
+	);
+	if (JSON.stringify(before.tasksMeta) !== JSON.stringify(after.tasksMeta))
+		lines.push(
+			`Metadata: ${approvalJson(before.tasksMeta)} -> ${approvalJson(after.tasksMeta)}`,
+		);
+	return lines.join("\n");
+}
+
 /** The subagents_write_task_models tool (parent sessions only). */
 export function registerTaskModelTool(
 	pi: ExtensionAPI,
 	{ shouldRegister }: { shouldRegister: (name: string) => boolean },
 ): void {
-	if (!process.env.PI_SUBAGENT_ID && shouldRegister(DIRECT_WRITER_TOOL))
+	if (!process.env.PI_SUBAGENT_ID && shouldRegister(DIRECT_WRITER_TOOL)) {
+		let pendingApproval:
+			| { controller: AbortController; finished: Promise<void> }
+			| undefined;
+		pi.on("session_shutdown", async () => {
+			const pending = pendingApproval;
+			if (!pending) return;
+			pending.controller.abort();
+			await pending.finished;
+		});
 		pi.registerTool({
 			name: DIRECT_WRITER_TOOL,
 			label: "Write task model preferences",
 			defaultActive: false,
-			description: `Validate and atomically replace models.tasks and models.tasksMeta in the durable Pi agent config, preserving unrelated settings. Supported categories: ${TASK_CATEGORIES.join(", ")}. Partial nonempty categories are accepted; omitted categories are removed. Rejects duplicate exact refs within a category. Review the active authenticated registry and existing preferences first. Optional expectedConfigRevision makes the write conditional: it fails without replacing configuration when the config file no longer matches the revision the proposal was read from. Optional basis records what the ranking rests on; its kind must equal tasksMeta.method, and it is returned but not saved. Cooperating writes are serialized and fail on contention rather than waiting. Returns normalized saved preferences, missing categories, the configRevision of the written file, and any basis; reload required.`,
+			description: `Validate task preferences, show exact before/after for user approval, then atomically replace models.tasks, models.tasksThinking and models.tasksMeta in the durable Pi agent config, preserving unrelated settings. Every call shows exact before/after for changed categories and requires user approval through a refusal-first selector (60-second timeout), even when another extension already approved it. No-UI, print/JSON and child sessions are refused without writing. Supported categories: ${TASK_CATEGORIES.join(", ")}. Partial nonempty categories are accepted; omitted categories are removed. Rejects duplicate exact refs within a category. Review the active authenticated registry and existing preferences first. Optional expectedConfigRevision also binds the proposal's starting revision: it fails without replacing configuration when the config file no longer matches the revision the proposal was read from. Optional basis records what the ranking rests on; its kind must equal tasksMeta.method, and it is returned but not saved. Concurrent approvals refuse immediately rather than stack. The full replacement bytes and real directory are prepared before approval and rechecked before rename. New files disclose their minimal status/models seed. Cooperating writes use an advisory lock, not a filesystem authorization boundary. Returns normalized saved preferences, missing categories, the configRevision of the written file, and any basis; reload required.`,
 			parameters: Type.Object({
 				tasks: Type.Object(
 					Object.fromEntries(
@@ -114,6 +186,28 @@ export function registerTaskModelTool(
 					),
 					{ additionalProperties: false, minProperties: 1 },
 				),
+				tasksThinking: Type.Optional(
+					Type.Union([
+						Type.Object(
+							Object.fromEntries(
+								TASK_CATEGORIES.map((category) => [
+									category,
+									Type.Optional(
+										Type.Union(
+											THINKING_LEVELS.map((level) => Type.Literal(level)),
+										),
+									),
+								]),
+							),
+							{
+								additionalProperties: false,
+								description:
+									"Category thinking, clamped per fallback candidate. Replaces the map when supplied ({} clears and removes it); omitted or null preserves thinking for retained categories. Entries require a submitted task category.",
+							},
+						),
+						Type.Null(),
+					]),
+				),
 				tasksMeta: Type.Object({
 					generatedAt: Type.String(),
 					method: Type.Union([
@@ -128,7 +222,7 @@ export function registerTaskModelTool(
 							Type.String({ pattern: "^sha256:[0-9a-f]{64}$" }),
 						],
 						{
-							description: `Revision of the config the proposal was read from: "sha256:" plus 64 lowercase hex digits of the exact file bytes, or "${MISSING_CONFIG_REVISION}" when the file is absent. A mismatch fails without writing; re-read, re-propose, and re-approve. Omit for an unconditional write.`,
+							description: `Revision of the config the proposal was read from: "sha256:" plus 64 lowercase hex digits of the exact file bytes, or "${MISSING_CONFIG_REVISION}" when the file is absent. A mismatch fails without writing; re-read, re-propose, and re-approve. Omit to propose against the current config; user approval still binds the exact snapshot shown.`,
 						},
 					),
 				),
@@ -164,45 +258,131 @@ export function registerTaskModelTool(
 					),
 				),
 			}),
-			execute: async (_id, params, _signal, _update, ctx) => {
-				const registry = wrapPiModelRegistry(ctx.modelRegistry);
-				// SAFETY: TypeBox validates the tool payload; the write seam performs stricter schema validation.
-				const tasks = params.tasks as TaskPreferences;
-				// SAFETY: TypeBox validates the tool payload; the write seam performs stricter schema validation.
-				const tasksMeta = params.tasksMeta as TaskPreferencesMeta;
-				// Present-but-invalid values (including null) fail before anything is written.
-				const basis = Object.hasOwn(params, "basis")
-					? parseRankingBasis(params.basis, tasksMeta.method)
-					: undefined;
-				const saved = writeTaskModelConfig(
-					getSubagentsConfigPath(),
-					getSubagentsConfigExamplePath(),
-					tasks,
-					tasksMeta,
-					(candidate) => {
+			execute: async (_id, params, signal, _update, ctx) => {
+				if (process.env.PI_SUBAGENT_ID)
+					throw new Error(
+						"Task model preferences not written: child sessions cannot approve task-model writes. Use a parent session with a user-facing UI.",
+					);
+				if (!ctx.hasUI || ctx.mode === "print" || ctx.mode === "json")
+					throw new Error(
+						"Task model preferences not written: user approval requires a dialog-capable UI; no-UI, print and JSON sessions cannot write.",
+					);
+				if (signal?.aborted)
+					throw new Error(
+						"Task model preferences not written: approval cancelled.",
+					);
+				if (readGlobalSlot<boolean>(TASK_MODEL_APPROVAL_SLOT))
+					throw new Error(
+						"Task model preferences not written: another approval is already open. Retry after it finishes.",
+					);
+				writeGlobalSlot(TASK_MODEL_APPROVAL_SLOT, true);
+				const controller = new AbortController();
+				const approvalSignal = signal
+					? AbortSignal.any([signal, controller.signal])
+					: controller.signal;
+				let finishApproval = () => {};
+				const finished = new Promise<void>((resolve) => {
+					finishApproval = resolve;
+				});
+				pendingApproval = { controller, finished };
+				let onAbort = () => {};
+				const aborted = new Promise<undefined>((resolve) => {
+					onAbort = () => resolve(undefined);
+				});
+				approvalSignal.addEventListener("abort", onAbort, { once: true });
+				try {
+					const registry = wrapPiModelRegistry(ctx.modelRegistry);
+					// SAFETY: TypeBox validates the tool payload; the write seam performs stricter schema validation.
+					const tasks = params.tasks as TaskPreferences;
+					// SAFETY: TypeBox validates the tool payload; the write seam performs stricter schema validation.
+					const tasksMeta = params.tasksMeta as TaskPreferencesMeta;
+					// Present-but-invalid values (including null) fail before anything is written.
+					const basis = Object.hasOwn(params, "basis")
+						? parseRankingBasis(params.basis, tasksMeta.method)
+						: undefined;
+					const options: WriteTaskModelConfigOptions = {
+						// SAFETY: the write seam validates the map's category keys and levels.
+						tasksThinking: params.tasksThinking as
+							| TaskThinkingPreferences
+							| undefined,
+					};
+					if (Object.hasOwn(params, "expectedConfigRevision"))
+						options.expectedConfigRevision = params.expectedConfigRevision;
+					const configPath = getSubagentsConfigPath();
+					const examplePath = getSubagentsConfigExamplePath();
+					const isAuthenticatedCandidate = (candidate: string) => {
 						const parsed = parseExactModelRef(candidate);
 						const model =
 							parsed && registry.find(parsed.provider, parsed.modelId);
 						return !!model && registry.hasConfiguredAuth(model);
-					},
-					// Present-but-invalid values (including null or "") reach the seam and fail closed.
-					Object.hasOwn(params, "expectedConfigRevision")
-						? { expectedConfigRevision: params.expectedConfigRevision }
-						: {},
-				);
-				releaseWriterAfterInit(pi);
-				const details = basis ? { ...saved, basis } : saved;
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Wrote task model preferences. Reload required.\n${JSON.stringify(details, null, 2)}`,
-						},
-					],
-					details,
-				};
+					};
+					const proposal = validateTaskModelProposal(
+						configPath,
+						tasks,
+						tasksMeta,
+						isAuthenticatedCandidate,
+						options,
+					);
+					const prepared = prepareTaskModelWrite(
+						configPath,
+						proposal,
+						options.expectedConfigRevision,
+					);
+					const message = taskModelApprovalMessage(prepared);
+					// Hiding a Pi selector may leave its promise pending, even after abort.
+					// Our own abort race must settle before shutdown invalidates this API.
+					const approved = await Promise.race([
+						ctx.ui.select(
+							`Approve task model preferences\n${message}${basis ? `\nRanking basis: ${basis.kind} (submitted, unverified; not saved).` : ""}`,
+							[DECLINE_TASK_MODELS, SAVE_TASK_MODELS],
+							{ timeout: 60_000, signal: approvalSignal },
+						),
+						aborted,
+					]);
+					if (approved !== SAVE_TASK_MODELS || approvalSignal.aborted)
+						throw new Error(
+							"Task model preferences not written: approval declined, cancelled or timed out. Obtain fresh approval before retrying.",
+						);
+					let saved;
+					try {
+						saved = writeTaskModelConfig(
+							configPath,
+							examplePath,
+							prepared.after.tasks ?? {},
+							prepared.after.tasksMeta ?? tasksMeta,
+							isAuthenticatedCandidate,
+							{
+								tasksThinking: prepared.after.tasksThinking ?? {},
+								expectedConfigRevision: prepared.configRevision,
+								approvedWrite: prepared,
+							},
+						);
+					} catch (error) {
+						throw new Error(
+							`${error instanceof Error ? error.message : String(error)} ${describeTaskModelWriteFailure(prepared)}`,
+							{ cause: error },
+						);
+					}
+					releaseWriterAfterInit(pi);
+					const details = basis ? { ...saved, basis } : saved;
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Wrote task model preferences. Reload required.\n${JSON.stringify(details, null, 2)}`,
+							},
+						],
+						details,
+					};
+				} finally {
+					approvalSignal.removeEventListener("abort", onAbort);
+					pendingApproval = undefined;
+					writeGlobalSlot(TASK_MODEL_APPROVAL_SLOT, false);
+					finishApproval();
+				}
 			},
 		});
+	}
 }
 
 /** The /subagents-init command and its cross-extension start event. */
@@ -212,6 +392,11 @@ export function registerTaskModelInit(pi: ExtensionAPI): void {
 			ctx: ExtensionCommandContext,
 			preferences: string,
 		): TaskModelInitOutcome => {
+			if (!ctx.hasUI || ctx.mode === "print" || ctx.mode === "json")
+				return {
+					kind: "not-started",
+					reason: "task-model init requires a dialog-capable UI for approval",
+				};
 			if (!ctx.isIdle() || ctx.hasPendingMessages())
 				return {
 					kind: "not-started",

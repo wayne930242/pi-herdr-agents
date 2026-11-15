@@ -64,7 +64,9 @@ Fakes are for conformance tests only.
   normalization for child text.
 - `maestro/adapters/pi/` — Pi launch, completion, session I/O, activity files,
   model SDK glue, and registry projection behind `PiHarnessAdapter`;
-  `child/subagent-done.ts` implements the child protocol, and
+  `child/subagent-done.ts` implements the child protocol (including the
+  opt-in persistent `caller_notify`, bounded by `maestro/core/specialist-notice.ts`,
+  [ADR-0019](adr/0019-specialist-notices.md)), and
   `child/declared-skills.ts` injects the declared skills the child's own Pi
   loaded on its first run (names come from `maestro/core/declared-skills.ts`).
   Launch is split into `launch.ts` (fresh transaction), `launch-resume.ts`
@@ -75,7 +77,10 @@ Fakes are for conformance tests only.
   `maestro/core/accept.ts` (spec validation, the closed verdict set, the
   `Check:` detail text, and the outcome-ledger line),
   `maestro/adapters/pi/accept-runner.ts` (`sh -c` with a timeout and
-  process-group termination), `maestro/adapters/pi/accept-groups.ts` (the
+  process-group termination), `maestro/adapters/pi/process-tree.ts` (the one
+  kill: a POSIX group kill, or `taskkill /T /F` on Windows while the shell
+  still runs, asynchronously except in the `exit` hook and final sweep),
+  `maestro/adapters/pi/accept-groups.ts` (the
   process-wide registry of running check groups, terminated by their owner at
   shutdown and killed by an `exit` hook),
   `maestro/adapters/pi/child/accept-check.ts` (the

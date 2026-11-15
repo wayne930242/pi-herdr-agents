@@ -1,4 +1,8 @@
-import type { TaskPreferences } from "./config/task-model-types.ts";
+import type {
+	TaskPreferences,
+	TaskThinkingPreferences,
+} from "./config/task-model-types.ts";
+import { encodeHostValue } from "./host-text.ts";
 import type { ThinkingLevel } from "./types.ts";
 import { isFiniteNumber, isString } from "./config/type-guards.ts";
 export type { ThinkingLevel } from "./types.ts";
@@ -67,13 +71,13 @@ export interface ResolvedRuntimePlan {
 	model: string;
 	thinking: ThinkingLevel;
 	modelSource: RuntimeSource;
-	thinkingSource: RuntimeSource;
+	thinkingSource: RuntimeSource | "task";
 	requestedModel?: string;
 	requestedThinking?: ThinkingLevel;
 	thinkingAdjustment?: {
 		from: ThinkingLevel;
 		to: ThinkingLevel;
-		reason: "non-reasoning" | "inherited-clamp";
+		reason: "non-reasoning" | "inherited-clamp" | "task-clamp";
 	};
 	observed?: {
 		model?: string;
@@ -329,6 +333,7 @@ export function resolveRuntimePlan(
 	agentDefaults: RuntimeRequest,
 	parent: ParentRuntime,
 	registry: ModelRegistryAdapter,
+	taskThinking?: ThinkingLevel,
 ): ResolvedRuntimePlan {
 	const modelSelection = selectField(request.model, agentDefaults.model);
 	let provider = parent.provider;
@@ -372,10 +377,10 @@ export function resolveRuntimePlan(
 		selectedModel = found;
 	}
 
-	const thinkingSelection = selectField(
-		request.thinking,
-		agentDefaults.thinking,
-	);
+	const thinkingSelection =
+		request.thinking == null && taskThinking != null
+			? { value: taskThinking, source: "task" as const }
+			: selectField(request.thinking, agentDefaults.thinking);
 	const preferredThinking = thinkingSelection.value ?? parent.thinking;
 	if (!isThinkingLevel(preferredThinking)) {
 		throw new RuntimeResolutionError(
@@ -385,7 +390,10 @@ export function resolveRuntimePlan(
 
 	let thinking = preferredThinking;
 	let thinkingAdjustment: ResolvedRuntimePlan["thinkingAdjustment"];
-	if (thinkingSelection.source !== "parent") {
+	if (
+		thinkingSelection.source !== "parent" &&
+		thinkingSelection.source !== "task"
+	) {
 		if (!selectedModel) {
 			throw new RuntimeResolutionError(
 				`model capability information is unavailable; cannot validate explicit thinking ${JSON.stringify(preferredThinking)}`,
@@ -403,7 +411,12 @@ export function resolveRuntimePlan(
 			thinkingAdjustment = {
 				from: preferredThinking,
 				to: thinking,
-				reason: selectedModel.reasoning ? "inherited-clamp" : "non-reasoning",
+				reason:
+					thinkingSelection.source === "task"
+						? "task-clamp"
+						: selectedModel.reasoning
+							? "inherited-clamp"
+							: "non-reasoning",
 			};
 		}
 	}
@@ -430,12 +443,14 @@ export function resolveRuntimePlans(
 	registry: ModelRegistryAdapter,
 	taskPreferences?: TaskPreferences,
 	worktree = false,
+	tasksThinking?: TaskThinkingPreferences,
 ): ResolvedRuntimePlan[] {
 	const selection = selectField(request.model, agentDefaults.model);
 	if (!selection.value)
 		return [resolveRuntimePlan(request, agentDefaults, parent, registry)];
 
 	let references: string[];
+	let taskThinking: ThinkingLevel | undefined;
 	const trimmed = selection.value.trim();
 	if (
 		selection.value
@@ -468,6 +483,8 @@ export function resolveRuntimePlans(
 		}
 		// SAFETY: Object.hasOwn above confirms this lower-cased category is a configured key.
 		const candidates = taskPreferences[category as keyof TaskPreferences] ?? [];
+		// SAFETY: category is a configured, parsed task preference key.
+		taskThinking = tasksThinking?.[category as keyof TaskPreferences];
 		references = candidates.filter((candidate) => {
 			const parsed = parseExactModelRef(candidate);
 			const model = parsed && registry.find(parsed.provider, parsed.modelId);
@@ -497,6 +514,7 @@ export function resolveRuntimePlans(
 				: agentDefaults,
 			parent,
 			registry,
+			taskThinking,
 		),
 	);
 }
@@ -544,7 +562,7 @@ function modelCatalogLine(
 			? `${formatTokenCount(model.maxTokens)} max output`
 			: undefined,
 	].filter(Boolean);
-	return `- ${model.provider}/${model.id} — ${facts.join(", ")}`;
+	return `- ${encodeHostValue(`${model.provider}/${model.id}`, Infinity)} — ${facts.join(", ")}`;
 }
 
 function finishModelCatalog(
@@ -552,30 +570,37 @@ function finishModelCatalog(
 	modelCount: number,
 	registry: ModelRegistryAdapter,
 	taskPreferences?: TaskPreferences,
+	tasksThinking?: TaskThinkingPreferences,
 ): string {
 	if (modelCount === 0)
 		lines.push(
 			"- none discovered; omitting model still inherits the parent runtime",
 		);
 	lines.push(
-		"Omitting model uses the role's model, then configured models.agents and models.default, then the parent model. Omitting thinking uses the role's level, otherwise the parent level, which an installed extension may replace from solutionSpace.",
+		"Omitting model uses the role's model, then configured models.agents and models.default, then the parent model. Omitting thinking uses a task category's configured thinking, then the role's level, otherwise the parent level, which an installed extension may replace from solutionSpace.",
 	);
 	lines.push(
 		...taskShortlistLines(
 			getAuthenticatedTaskPreferences(registry, taskPreferences),
+			tasksThinking,
 		),
 	);
 	return lines.join("\n");
 }
 
-function taskShortlistLines(shortlists: TaskPreferences): string[] {
+function taskShortlistLines(
+	shortlists: TaskPreferences,
+	tasksThinking?: TaskThinkingPreferences,
+): string[] {
 	const configured = Object.entries(shortlists);
 	if (configured.length === 0) return [];
 	return [
 		"Task-category shortlists:",
-		...configured.map(
-			([category, candidates]) => `- ${category}: ${candidates.join(", ")}`,
-		),
+		...configured.map(([category, candidates]) => {
+			// SAFETY: shortlists contain only parsed task category keys.
+			const thinking = tasksThinking?.[category as keyof TaskPreferences];
+			return `- ${category}: ${candidates.map((candidate) => encodeHostValue(candidate, Infinity)).join(", ")}${thinking ? `; thinking: ${thinking} (clamped per candidate)` : "; thinking: role, then parent"}`;
+		}),
 	];
 }
 
@@ -583,6 +608,7 @@ export function buildAuthenticatedModelCatalog(
 	registry: ModelRegistryAdapter,
 	limit = 24,
 	taskPreferences?: TaskPreferences,
+	tasksThinking?: TaskThinkingPreferences,
 ): string {
 	const models = registry
 		.available()
@@ -600,7 +626,7 @@ export function buildAuthenticatedModelCatalog(
 			(model) => !refs.has(`${model.provider}/${model.id}`),
 		);
 		const lines = [
-			...taskShortlistLines(shortlists),
+			...taskShortlistLines(shortlists, tasksThinking),
 			"Shortlisted model capabilities:",
 			...shortlisted.map((model) => modelCatalogLine(registry, model)),
 		];
@@ -608,7 +634,9 @@ export function buildAuthenticatedModelCatalog(
 			lines.push(
 				`Other authenticated model IDs: ${alternatives
 					.slice(0, limit)
-					.map((model) => `${model.provider}/${model.id}`)
+					.map((model) =>
+						encodeHostValue(`${model.provider}/${model.id}`, Infinity),
+					)
 					.join(", ")}`,
 			);
 		if (alternatives.length > limit)
@@ -628,7 +656,13 @@ export function buildAuthenticatedModelCatalog(
 			`- … ${models.length - visibleModels.length} more authenticated models omitted`,
 		);
 	}
-	return finishModelCatalog(lines, models.length, registry, taskPreferences);
+	return finishModelCatalog(
+		lines,
+		models.length,
+		registry,
+		taskPreferences,
+		tasksThinking,
+	);
 }
 
 // Scoped catalogs replace the truncated authenticated snapshot with the
@@ -642,6 +676,7 @@ export function buildScopedModelCatalog(
 	scopedModels: readonly RoutingModel[],
 	taskPreferences?: TaskPreferences,
 	limit = 24,
+	tasksThinking?: TaskThinkingPreferences,
 ): string {
 	const seen = new Set<string>();
 	const models = scopedModels
@@ -665,5 +700,11 @@ export function buildScopedModelCatalog(
 			`- … ${models.length - visibleModels.length} more scoped models omitted`,
 		);
 	}
-	return finishModelCatalog(lines, models.length, registry, taskPreferences);
+	return finishModelCatalog(
+		lines,
+		models.length,
+		registry,
+		taskPreferences,
+		tasksThinking,
+	);
 }

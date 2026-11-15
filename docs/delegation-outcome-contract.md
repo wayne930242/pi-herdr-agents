@@ -95,6 +95,14 @@ line.
 | `help-request` | A child calls `caller_ping`, or a persistent specialist asks for help on a task the parent issued. | `pi-extension/subagents/delivery.ts` `settle`, `deliverPersistentTaskEvent` |
 | `task-result` | A persistent specialist finishes a task the parent issued. | `delivery.ts` `deliverPersistentTaskEvent` |
 
+A persistent specialist's notice (`subagent_notice`,
+[ADR-0019](adr/0019-specialist-notices.md)) is not a kind and has no envelope.
+It is delivered only when the parent launched the specialist with `notify:
+true`. Its message is one [host-line value](#host-line-values) after the fixed
+`Notice:` label, followed by a host line telling the parent to treat it as a
+report to evaluate. The optional `notify` request field and this message are
+additive: a parent that never sets `notify` receives nothing new.
+
 A provider or agent error has no envelope. The host puts the error after the
 fixed `Error:` label in its head and delivers no body
 (`resolveResultPresentation`). The child process
@@ -186,6 +194,7 @@ The raw values stay in structured details (`errorMessage`, `fallbackFailures`,
 | Worktree fields | `Worktree:`, `Workspace:`, `Branch:`, `Base/head:`, the `Changed:` and `Untracked:` lists, and `Git inspection warning:` |
 | Session file | `Session:` |
 | Persistent task IDs | Task-result and help-request heads, the ignored-event notice, and the `Task outcomes:` list in crash and stop notices |
+| Specialist notice message | `Notice:` in a `subagent_notice`, bounded to 4,000 characters (`delivery.ts` `deliverNotice`) |
 
 #### Executable commands
 
@@ -420,7 +429,16 @@ version, which refreshes `released.json`.
 
 The same test file pins fields packs depend on. These are
 `subagent.systemPrompt` and the optional `expectedConfigRevision` and `basis`
-of `subagents_write_task_models` (`tool-schema.test.ts:78-90`). It also pins
+of `subagents_write_task_models` (`tool-schema.test.ts:78-90`). Its optional
+`tasksThinking` map adds category thinking without changing existing request shapes;
+models and thinking use the same atomic revision-checked write. The host writer
+now requires approval of the exact changes in a refusal-first parent UI selector on every call;
+headless and child calls refuse. The optional proposal revision remains compatible,
+but even a call without it re-checks the snapshot, complete replacement bytes,
+and resolved directory shown at approval before writing. Missing files use only
+the disclosed status/models seed. Approval is not a filesystem boundary.
+The retained v1 init handoff cannot bypass this prompt. See
+[writer approval](configuration.md#task-model-writer). The same schema test also pins
 `caller_ping` and `subagent_done` to the child scope (`tool-schema.test.ts:92-97`).
 
 ## Verdicts

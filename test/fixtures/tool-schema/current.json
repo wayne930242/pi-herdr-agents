@@ -1,6 +1,21 @@
 {
 	"tools": [
 		{
+			"name": "caller_notify",
+			"scopes": ["child"],
+			"description": "Wake the parent agent with a short notice that something changed, without ending or completing any task. Only for a persistent specialist whose parent opted in; at most 50 notices, at least 30 seconds apart. Send one only when something the parent cares about changed, never to say that nothing changed.",
+			"parameters": {
+				"type": "object",
+				"required": ["message"],
+				"properties": {
+					"message": {
+						"description": "What changed, in a sentence or two",
+						"type": "string"
+					}
+				}
+			}
+		},
+		{
 			"name": "caller_ping",
 			"scopes": ["child"],
 			"description": "Send a help request to the parent agent and exit this session. The parent will be notified with your message and can resume this session with a response. Use when you're stuck, need clarification, or need the parent to take action.",
@@ -44,7 +59,7 @@
 						"type": "string"
 					},
 					"thinking": {
-						"description": "Pi thinking level, within the chosen model's supported range. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead.",
+						"description": "Pi thinking level, within the chosen model's supported range. Overrides task-category thinking (clamped per candidate), then role thinking, then parent. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses those defaults in that order; an installed extension may set the child's level from solutionSpace instead.",
 						"anyOf": [
 							{ "const": "off", "type": "string" },
 							{ "const": "minimal", "type": "string" },
@@ -98,6 +113,10 @@
 					},
 					"persistent": {
 						"description": "Keep the child alive between tasks. Send later tasks with subagent_send.",
+						"type": "boolean"
+					},
+					"notify": {
+						"description": "Persistent only. Give the specialist caller_notify, so it can wake you between tasks when something changes (at most 50 notices, rate-limited). Default false.",
 						"type": "boolean"
 					},
 					"accept": {
@@ -252,7 +271,7 @@
 		{
 			"name": "subagents_write_task_models",
 			"scopes": ["parent"],
-			"description": "Validate and atomically replace models.tasks and models.tasksMeta in the durable Pi agent config, preserving unrelated settings. Supported categories: coding, complex-coding, review, recon, qa, architecture, docs. Partial nonempty categories are accepted; omitted categories are removed. Rejects duplicate exact refs within a category. Review the active authenticated registry and existing preferences first. Optional expectedConfigRevision makes the write conditional: it fails without replacing configuration when the config file no longer matches the revision the proposal was read from. Optional basis records what the ranking rests on; its kind must equal tasksMeta.method, and it is returned but not saved. Cooperating writes are serialized and fail on contention rather than waiting. Returns normalized saved preferences, missing categories, the configRevision of the written file, and any basis; reload required.",
+			"description": "Validate task preferences, show exact before/after for user approval, then atomically replace models.tasks, models.tasksThinking and models.tasksMeta in the durable Pi agent config, preserving unrelated settings. Every call shows exact before/after for changed categories and requires user approval through a refusal-first selector (60-second timeout), even when another extension already approved it. No-UI, print/JSON and child sessions are refused without writing. Supported categories: coding, complex-coding, review, recon, qa, architecture, docs. Partial nonempty categories are accepted; omitted categories are removed. Rejects duplicate exact refs within a category. Review the active authenticated registry and existing preferences first. Optional expectedConfigRevision also binds the proposal's starting revision: it fails without replacing configuration when the config file no longer matches the revision the proposal was read from. Optional basis records what the ranking rests on; its kind must equal tasksMeta.method, and it is returned but not saved. Concurrent approvals refuse immediately rather than stack. The full replacement bytes and real directory are prepared before approval and rechecked before rename. New files disclose their minimal status/models seed. Cooperating writes use an advisory lock, not a filesystem authorization boundary. Returns normalized saved preferences, missing categories, the configRevision of the written file, and any basis; reload required.",
 			"parameters": {
 				"type": "object",
 				"required": ["tasks", "tasksMeta"],
@@ -306,6 +325,95 @@
 							}
 						}
 					},
+					"tasksThinking": {
+						"anyOf": [
+							{
+								"additionalProperties": false,
+								"description": "Category thinking, clamped per fallback candidate. Replaces the map when supplied ({} clears and removes it); omitted or null preserves thinking for retained categories. Entries require a submitted task category.",
+								"type": "object",
+								"properties": {
+									"coding": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"complex-coding": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"review": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"recon": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"qa": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"architecture": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									},
+									"docs": {
+										"anyOf": [
+											{ "const": "off", "type": "string" },
+											{ "const": "minimal", "type": "string" },
+											{ "const": "low", "type": "string" },
+											{ "const": "medium", "type": "string" },
+											{ "const": "high", "type": "string" },
+											{ "const": "xhigh", "type": "string" },
+											{ "const": "max", "type": "string" }
+										]
+									}
+								}
+							},
+							{ "type": "null" }
+						]
+					},
 					"tasksMeta": {
 						"type": "object",
 						"required": ["generatedAt", "method"],
@@ -320,7 +428,7 @@
 						}
 					},
 					"expectedConfigRevision": {
-						"description": "Revision of the config the proposal was read from: \"sha256:\" plus 64 lowercase hex digits of the exact file bytes, or \"missing\" when the file is absent. A mismatch fails without writing; re-read, re-propose, and re-approve. Omit for an unconditional write.",
+						"description": "Revision of the config the proposal was read from: \"sha256:\" plus 64 lowercase hex digits of the exact file bytes, or \"missing\" when the file is absent. A mismatch fails without writing; re-read, re-propose, and re-approve. Omit to propose against the current config; user approval still binds the exact snapshot shown.",
 						"anyOf": [
 							{ "const": "missing", "type": "string" },
 							{ "pattern": "^sha256:[0-9a-f]{64}$", "type": "string" }

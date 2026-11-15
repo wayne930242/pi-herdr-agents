@@ -22,6 +22,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import {
 	isBoolean,
+	isFiniteNumber,
 	isPlainObject,
 	isRecord,
 	isString,
@@ -88,6 +89,8 @@ export interface SubagentSessionPolicyV2 {
 	logicalId: string;
 	generationId: string;
 	policyHash: string;
+	agent?: string | null;
+	selfSpawn?: boolean;
 	worktree?: PolicyWorktree;
 }
 
@@ -97,11 +100,14 @@ export type SubagentSessionPolicy =
 
 export interface PersistentTaskEvent {
 	version: 1;
-	type: "task-done" | "help-request";
+	/** A `notice` belongs to no task: its `task` is "" (ADR-0019). */
+	type: "task-done" | "help-request" | "notice";
 	task: string;
 	generation: string;
 	at: string;
 	message?: string;
+	/** A notice's 1-based number within its generation. */
+	sequence?: number;
 }
 
 export interface PersistentDeliveryLedgerEntry {
@@ -156,7 +162,7 @@ function normalizePolicyToolNames(
 function canonicalPolicyJson(
 	policy: Omit<SubagentSessionPolicyV2, "policyHash">,
 ): string {
-	const canonical = {
+	const canonical: Omit<SubagentSessionPolicyV2, "policyHash"> = {
 		version: policy.version,
 		owner: policy.owner,
 		tools: policy.tools,
@@ -165,9 +171,10 @@ function canonicalPolicyJson(
 		logicalId: policy.logicalId,
 		generationId: policy.generationId,
 	};
-	return JSON.stringify(
-		policy.worktree ? { ...canonical, worktree: policy.worktree } : canonical,
-	);
+	if ("agent" in policy) canonical.agent = policy.agent;
+	if ("selfSpawn" in policy) canonical.selfSpawn = policy.selfSpawn;
+	if (policy.worktree) canonical.worktree = policy.worktree;
+	return JSON.stringify(canonical);
 }
 
 export function writeSubagentSessionPolicy(
@@ -179,6 +186,8 @@ export function writeSubagentSessionPolicy(
 		persistent?: boolean;
 		logicalId?: string;
 		generationId?: string;
+		agent?: string | null;
+		selfSpawn?: boolean;
 		worktree?: PolicyWorktree;
 	},
 ): SubagentSessionPolicyV2 {
@@ -191,6 +200,8 @@ export function writeSubagentSessionPolicy(
 		logicalId: policy.logicalId ?? randomUUID(),
 		generationId: policy.generationId ?? randomUUID(),
 	};
+	if (policy.agent !== undefined) unsigned.agent = policy.agent;
+	if (policy.selfSpawn !== undefined) unsigned.selfSpawn = policy.selfSpawn;
 	if (policy.worktree) unsigned.worktree = policy.worktree;
 	const value: SubagentSessionPolicyV2 = {
 		...unsigned,
@@ -252,6 +263,8 @@ export function readSubagentSessionPolicy(
 					"logicalId",
 					"generationId",
 					"policyHash",
+					"agent",
+					"selfSpawn",
 					"worktree",
 				]);
 	if (Object.keys(value).some((key) => !expected.has(key))) {
@@ -364,6 +377,24 @@ export function readSubagentSessionPolicy(
 		logicalId: value.logicalId,
 		generationId: value.generationId,
 	};
+	if (value.agent !== undefined) {
+		if (value.agent !== null && !isString(value.agent)) {
+			throw policyError(
+				sessionFile,
+				"the saved launch agent policy is malformed",
+			);
+		}
+		unsigned.agent = value.agent;
+	}
+	if (value.selfSpawn !== undefined) {
+		if (!isBoolean(value.selfSpawn)) {
+			throw policyError(
+				sessionFile,
+				"the saved launch self-spawn policy is malformed",
+			);
+		}
+		unsigned.selfSpawn = value.selfSpawn;
+	}
 	if (worktree) unsigned.worktree = worktree;
 	if (
 		createHash("sha256").update(canonicalPolicyJson(unsigned)).digest("hex") !==
@@ -393,12 +424,24 @@ export function appendPersistentTaskEvent(
 		at: event.at ?? new Date().toISOString(),
 	};
 	if (event.message !== undefined) value.message = event.message;
+	if (event.sequence !== undefined) value.sequence = event.sequence;
 	appendFileSync(
 		getPersistentTaskEventsFile(sessionFile),
 		`${JSON.stringify(value)}\n`,
 		"utf8",
 	);
 	return value;
+}
+
+/** A notice's number; `undefined` when it lacks a message or a positive whole number. */
+function parseNoticeSequence(value: JsonObject): number | undefined {
+	const sequence = value.sequence;
+	return isString(value.message) &&
+		isFiniteNumber(sequence) &&
+		Number.isSafeInteger(sequence) &&
+		sequence >= 1
+		? sequence
+		: undefined;
 }
 
 export function readPersistentTaskEvents(
@@ -414,13 +457,17 @@ export function readPersistentTaskEvents(
 				if (
 					!isRecord(value) ||
 					value.version !== 1 ||
-					(value.type !== "task-done" && value.type !== "help-request") ||
+					(value.type !== "task-done" &&
+						value.type !== "help-request" &&
+						value.type !== "notice") ||
 					!isString(value.task) ||
 					!isString(value.generation) ||
 					!isString(value.at) ||
 					(value.message !== undefined && !isString(value.message))
 				)
 					return [];
+				const sequence = parseNoticeSequence(value);
+				if (value.type === "notice" && sequence === undefined) return [];
 				const event: PersistentTaskEvent = {
 					version: 1,
 					type: value.type,
@@ -429,6 +476,7 @@ export function readPersistentTaskEvents(
 					at: value.at,
 				};
 				if (value.message !== undefined) event.message = value.message;
+				if (value.type === "notice") event.sequence = sequence;
 				return [event];
 			} catch {
 				return [];

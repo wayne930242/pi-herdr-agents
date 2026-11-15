@@ -1,6 +1,6 @@
 {
   "name": "pi-herdr-agents",
-  "version": "3.9.0",
+  "version": "3.11.0",
   "description": "Asynchronous Pi subagents in Herdr, with optional isolated Git worktrees",
   "keywords": [
     "pi-package",
@@ -64,9 +64,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.11",
-    "@earendil-works/pi-ai": "^1.0.0",
-    "@earendil-works/pi-coding-agent": "^1.1.0",
-    "@earendil-works/pi-tui": "^1.0.0",
+    "@earendil-works/pi-ai": "^1.5.2",
+    "@earendil-works/pi-coding-agent": "^1.5.2",
+    "@earendil-works/pi-tui": "^1.5.2",
     "@oxlint/plugins": "^1.80.0",
     "@sinclair/typebox": "^0.34.52",
     "auto-changelog": "^2.6.0",

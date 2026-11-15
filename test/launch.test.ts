@@ -50,6 +50,25 @@ function expectedShellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Compare checkouts after native realpath: Windows 8.3 names and slash forms differ. */
+function assertSamePath(actual: string | undefined, expected: string): void {
+	if (actual === undefined) {
+		assert.fail("expected a path");
+	}
+	// Node's JS realpath leaves 8.3 short names alone; the native one expands them.
+	assert.equal(
+		canonicalizeCheckoutPath(actual),
+		canonicalizeCheckoutPath(expected),
+	);
+}
+
+function canonicalizeCheckoutPath(path: string): string {
+	const resolved = realpathSync.native(path);
+	if (process.platform !== "win32") return resolved;
+	// GetFinalPathNameByHandle may prefix \\?\; drop it and ignore case.
+	return resolved.replace(/^\\\\\?\\/, "").toLowerCase();
+}
+
 function fixture() {
 	const root = realpathSync(
 		mkdtempSync(join(tmpdir(), "subagent-launch-test-[probe](regex)-")),
@@ -114,6 +133,8 @@ function initializeGitRepository(cwd: string): void {
 	execFileSync("git", ["config", "user.email", "test@example.com"], { cwd });
 	execFileSync("git", ["config", "user.name", "Test"], { cwd });
 	execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd });
+	// Isolate from the runner's autocrlf so file-content asserts stay LF.
+	execFileSync("git", ["config", "core.autocrlf", "false"], { cwd });
 }
 
 function commitAll(cwd: string, message: string): string {
@@ -129,7 +150,13 @@ function createLinkedGitFixture(root: string, principal: string) {
 	initializeGitRepository(principal);
 	writeFileSync(join(principal, "base.txt"), "base\n");
 	const principalSha = commitAll(principal, "base");
-	const linked = join(root, "linked source α\ncheckout");
+	// Windows rejects a newline in a directory name; keep a spaced Unicode path.
+	const linked = join(
+		root,
+		process.platform === "win32"
+			? "linked source α checkout"
+			: "linked source α\ncheckout",
+	);
 	execFileSync(
 		"git",
 		["worktree", "add", "-q", "-b", "linked/source", linked, principalSha],
@@ -489,7 +516,13 @@ describe("Pi launch", () => {
 		]);
 		const read = (pid: number) => environments.get(pid);
 		assert.equal(
-			isExpectedPiProcess(herdrReported, "/tmp/child.jsonl", "/repo", read),
+			isExpectedPiProcess(
+				herdrReported,
+				"/tmp/child.jsonl",
+				"/repo",
+				read,
+				"linux",
+			),
 			true,
 		);
 		for (const process of [
@@ -505,7 +538,13 @@ describe("Pi launch", () => {
 			{ ...herdrReported, name: "node" },
 		]) {
 			assert.equal(
-				isExpectedPiProcess(process, "/tmp/child.jsonl", "/repo", read),
+				isExpectedPiProcess(
+					process,
+					"/tmp/child.jsonl",
+					"/repo",
+					read,
+					"linux",
+				),
 				false,
 				JSON.stringify(process),
 			);
@@ -851,7 +890,7 @@ describe("Pi launch", () => {
 				worktree: createWorktreeOperations(),
 				createPane(name, cwd) {
 					assert.equal(name, "Worker");
-					assert.equal(cwd, project);
+					assertSamePath(cwd, project);
 					return "pane-null-worktree";
 				},
 				createWorktree() {
@@ -1678,7 +1717,7 @@ describe("Pi launch", () => {
 					worktree: createWorktreeOperations(),
 					createPane(name, cwd) {
 						assert.equal(name, "Resume worker");
-						assert.equal(cwd, project);
+						assertSamePath(cwd, project);
 						events.push("create");
 						return "pane-resume";
 					},
@@ -1872,6 +1911,9 @@ describe("Pi launch", () => {
 			execFileSync("git", ["config", "commit.gpgsign", "false"], {
 				cwd: project,
 			});
+			execFileSync("git", ["config", "core.autocrlf", "false"], {
+				cwd: project,
+			});
 			writeFileSync(join(project, "base.txt"), "base\n");
 			execFileSync("git", ["add", "base.txt"], { cwd: project });
 			execFileSync("git", ["commit", "-qm", "base"], { cwd: project });
@@ -1911,7 +1953,7 @@ describe("Pi launch", () => {
 				},
 				createWorktree(name, cwd, branch, base) {
 					assert.equal(name, "Worker");
-					assert.equal(cwd, project);
+					assertSamePath(cwd, project);
 					assert.equal(branch, "issue/7");
 					assert.equal(base, baseSha);
 					assert.equal(
@@ -2016,11 +2058,11 @@ describe("Pi launch", () => {
 				},
 				createWorktree(name, cwd, branch, base) {
 					assert.equal(name, "Worker");
-					assert.equal(cwd, project);
+					assertSamePath(cwd, project);
 					assert.equal(branch, "issue/59-fresh");
 					assert.equal(base, linkedSha);
 					const provisioning = JSON.parse(readFileSync(manifestFile, "utf8"));
-					assert.equal(provisioning.sourceCwd, linkedCwd);
+					assertSamePath(provisioning.sourceCwd, linkedCwd);
 					assert.equal(provisioning.baseSha, linkedSha);
 					execFileSync(
 						"git",
@@ -2066,7 +2108,7 @@ describe("Pi launch", () => {
 				command.startsWith(`cd ${expectedShellQuote(worktreePath)} && `),
 			);
 			const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
-			assert.equal(manifest.sourceCwd, linkedCwd);
+			assertSamePath(manifest.sourceCwd, linkedCwd);
 			assert.equal(manifest.baseSha, linkedSha);
 		});
 	});
@@ -2131,10 +2173,10 @@ describe("Pi launch", () => {
 				},
 				createWorktree(name, cwd, branch, base) {
 					assert.equal(name, "Handoff");
-					assert.equal(cwd, project);
+					assertSamePath(cwd, project);
 					assert.equal(branch, "handoff/59");
 					assert.equal(base, linkedSha);
-					assert.equal(
+					assertSamePath(
 						JSON.parse(readFileSync(manifestFile, "utf8")).sourceCwd,
 						linkedCwd,
 					);
@@ -2204,7 +2246,7 @@ describe("Pi launch", () => {
 				readFileSync(join(worktreePath, "linked.txt"), "utf8"),
 				"linked\n",
 			);
-			assert.equal(
+			assertSamePath(
 				JSON.parse(readFileSync(manifestFile, "utf8")).sourceCwd,
 				linkedCwd,
 			);
@@ -2263,6 +2305,9 @@ describe("Pi launch", () => {
 			execFileSync("git", ["config", "commit.gpgsign", "false"], {
 				cwd: project,
 			});
+			execFileSync("git", ["config", "core.autocrlf", "false"], {
+				cwd: project,
+			});
 			writeFileSync(join(project, "base.txt"), "base\n");
 			execFileSync("git", ["add", "base.txt"], { cwd: project });
 			execFileSync("git", ["commit", "-qm", "base"], { cwd: project });
@@ -2276,7 +2321,7 @@ describe("Pi launch", () => {
 					throw new Error("unexpected pane creation");
 				},
 				createWorktree(_name, cwd, branch, base) {
-					assert.equal(cwd, project);
+					assertSamePath(cwd, project);
 					assert.equal(branch, "handoff/feature");
 					assert.equal(
 						base,
@@ -2390,6 +2435,9 @@ describe("Pi launch", () => {
 			execFileSync("git", ["config", "commit.gpgsign", "false"], {
 				cwd: project,
 			});
+			execFileSync("git", ["config", "core.autocrlf", "false"], {
+				cwd: project,
+			});
 			writeFileSync(join(project, "base.txt"), "base\n");
 			execFileSync("git", ["add", "base.txt"], { cwd: project });
 			execFileSync("git", ["commit", "-qm", "base"], { cwd: project });
@@ -2498,6 +2546,9 @@ describe("Pi launch", () => {
 			execFileSync("git", ["config", "commit.gpgsign", "false"], {
 				cwd: project,
 			});
+			execFileSync("git", ["config", "core.autocrlf", "false"], {
+				cwd: project,
+			});
 			writeFileSync(join(project, "base.txt"), "base\n");
 			execFileSync("git", ["add", "base.txt"], { cwd: project });
 			execFileSync("git", ["commit", "-qm", "base"], { cwd: project });
@@ -2602,6 +2653,9 @@ describe("Pi launch", () => {
 			});
 			execFileSync("git", ["config", "user.name", "Test"], { cwd: project });
 			execFileSync("git", ["config", "commit.gpgsign", "false"], {
+				cwd: project,
+			});
+			execFileSync("git", ["config", "core.autocrlf", "false"], {
 				cwd: project,
 			});
 			writeFileSync(join(project, "base.txt"), "base\n");

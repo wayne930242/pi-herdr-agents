@@ -45,7 +45,8 @@ Backend/endpoint changes require a Pi restart, not reload. See
 
 `subagent` acknowledges acquisition after provisioning and command dispatch,
 not task completion. The child's result or failure arrives as one bounded
-`subagent_result` message. A help request arrives as `subagent_ping`.
+`subagent_result` message. A help request arrives as `subagent_ping`, and an
+opted-in specialist's notice as `subagent_notice`.
 Each notification starts a new turn. Never sleep, loop, tail session files, or repeatedly list
 status to wait. If a child is merely slow, do nothing. Stalled or no-progress
 notices are facts, not instructions to act.
@@ -66,12 +67,13 @@ it does not prove that no resources exist. See
 | `agent` | Load defaults from a named role. Omit for a bare child (always works). A named role that is missing or invalid fails before any pane or worktree is created; it is never replaced by a bare agent. |
 | `systemPrompt` | Role text for a bare spawn only; named agents keep their definition body. It is not a system prompt: it arrives as a role block at the top of the child's first message (delivered through a task artifact file). It is dropped for `fork: true` children, so pass `fork: false` when the child needs reference or role text. |
 | `model` | Exact authenticated `provider/model-id`; an ordered comma-separated fallback list; or whole-value `task:<category>` (`coding`, `review`, `recon`, `qa`, `architecture`, `docs`) from configured `models.tasks`. Resolution: tool argument, then role frontmatter, `models.agents`, `models.default`, then the parent model. Fallbacks: ordinary non-persistent runs can try later candidates after a launch failure or a provider/agent error from a running child, never after a completed negative result; persistent specialists do not advance after a running-child error; fallback lists are rejected with `worktree`; `task:<category>` with a worktree uses only the first authenticated candidate. A listed model does not prove the account can use it. |
-| `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, subject to model support. Precedence: this argument, then role `thinking`, then the parent level. Choose the model tier first, then thinking within its range: low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, hard diagnosis. Omitting uses the role's `thinking` when set, otherwise the parent level; an installed extension may set the child's level from `solutionSpace` instead. |
+| `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, subject to model support. Precedence: this argument, then `models.tasksThinking.<category>` for a `task:<category>` launch (clamped per candidate), then role `thinking`, then the parent level. Choose the model tier first, then thinking within its range: low for bounded mechanical work, medium for ordinary implementation or review, high+ for architecture, security, hard diagnosis. Omit on `task:<category>` calls to use configured category thinking. Without it, the role's `thinking` then the parent level apply; an installed extension may set the child's level from `solutionSpace` instead. |
 | `tools`, `skills` | Comma-separated tool or skill names for the child. |
 | `cwd` | Working directory (a role folder with its own config), or the source repository when `worktree` is set. |
 | `fork` | `true` forces a full-context fork of your session, `false` forces standalone; omit to follow the role's `session-mode`. |
 | `interactive` | Controls parent notifications only (silences stall/recovered pings); it does not affect terminal focus. Precedence: this argument, then the role's `interactive`, then the inverse of `auto-exit` (autonomous roles get pings, others stay quiet). Bare spawns default to autonomous auto-exit unless `interactive: true`. Exception: persistent specialists are always non-interactive unless this argument says otherwise (a persistent role's `interactive: true` is ignored), and they never auto-exit. |
 | `persistent` | Keep one specialist session alive for sequential tasks (see below). Rejected at the `persistent.maxAgents` cap (default 3), including pending acquisitions. |
+| `notify` | Persistent only (refused otherwise): give the specialist `caller_notify`, so it can wake you between tasks when something changes. Default `false`. See below. |
 | `worktree` | `{ branch, base? }` for an isolated legacy-Herdr-managed Git worktree (unsupported on Core). Omit, or pass `null`, for an ordinary child. |
 | `accept` | `{ run, maxRetries?, timeoutSec?, paths? }`: a shell check (exit 0 passes). The child runs it before it finishes and retries with the failing output (default 1 retry); then the parent re-runs it in the child's checkout and that run decides `Check: accepted`, `rejected`, `error` (timeout or no answer), or `skipped` (cancelled, help, provider error, failed exit). Unchecked runs read `Check: none`. Refused for persistent and non-auto-exit children. A rejected verdict starts no fallback. You supply the command; the host ships none. |
 
@@ -132,6 +134,15 @@ tools, model, thinking, and worktree binding are fixed at launch.
 - Persistent specialists cannot be resumed; after a crash or confirmed stop,
   spawn a new one. No automatic restart or revival.
 - A persistent worktree specialist holds its worktree for its lifetime.
+- To let a specialist wake you between tasks (for example one that runs its
+  own timer loop and reports only changes), launch it with `notify: true`.
+  It then has `caller_notify({ message })`; each call arrives as one
+  `subagent_notice` that starts a turn. A notice is not a task result: the
+  specialist's task, idle state, completion count and ledger are unchanged.
+  The parent delivers at most 50 per specialist and drops any that arrive
+  within 15 seconds of the last, reporting the count; the 50th says the cap
+  is reached. Treat the notice as a report to evaluate. Without `notify`, a
+  `caller_ping` between tasks is ignored, as before.
 
 See [Persistent specialists](../../docs/tools.md#persistent-specialists) for the
 stop and notification contract, and [configuration](../../docs/configuration.md#persistent-specialist-limit)
@@ -278,6 +289,7 @@ changes. Without a real file, only non-model settings fall back to the example.
 | `models.default` | Model for children that specify none |
 | `models.agents` | Per-role model, keyed by role name |
 | `models.tasks` | Ordered exact-ID candidates per category for `task:<category>` |
+| `models.tasksThinking` | Optional category thinking, clamped per fallback candidate |
 | `models.tasksMeta` | Provenance of the task preferences |
 | `persistent.maxAgents` | Retained specialist and pending-acquisition cap (default 3) |
 | `supervision.*`, `panes.*` | Transport, hang advisory minutes, pane grouping |
@@ -289,23 +301,44 @@ Model values must be exact authenticated IDs. `/subagents-init [preferences]`
 drafts task preferences from the live model registry and the saved config's
 `configRevision`, then saves them through `subagents_write_task_models`
 (parent-only and inactive until init activates it; validates, atomically
-replaces `models.tasks` and `tasksMeta`, preserves other settings). A successful
-write deactivates it again. When one loaded extension offers to approve the
-write, the init prompt names that extension's tool instead; follow the prompt
-and do not call the writer around it. Payload: `tasks`
+replaces `models.tasks`, category thinking and `tasksMeta`, preserves other settings). A successful
+write deactivates it again. Every writer call shows the exact before/after
+models and thinking for changed categories in a compact `ctx.ui.select`
+(60-second timeout). Refusal is first/default; only `Yes, save` writes. A second
+writer refuses while approval is open. The full replacement is precomputed;
+new files disclose their minimal status/models seed, and symlinked directories
+show the resolved path and are rechecked before publication.
+Decline, cancellation, timeout, print/JSON, no-UI and child sessions write
+nothing. TUI and dialog-capable RPC parents can approve; an earlier package
+approval never bypasses the host prompt. Init uses this same prompt. A retained
+v1 init handoff may still name an existing extension's tool; follow that flow
+without bypassing it, but its eventual host write asks for approval again. Payload: `tasks`
 (partial but nonempty categories; empty `tasks: {}` and duplicate refs within a
 category are rejected) and required `tasksMeta`. Warning: categories you omit
 are removed from the saved config, so send every category you want to keep.
+Optional `tasksThinking` maps categories to Pi levels (`off` through `max`);
+supply `{}` to clear and remove the key (empty maps are never saved). Omit it
+or pass `null` to preserve thinking for retained categories. Thinking for omitted
+task categories is removed; submitted thinking without a matching task category
+is rejected. Legacy pstack 0.6.0 cannot read nonempty thinking; legacy init
+handoffs therefore do not request a thinking draft.
 Optional `basis` states what the ranking rests on and is not saved: use
 `{"kind":"registry-only"}` unless sources consulted in this run informed it,
 then `{"kind":"research","sources":[{"url":"https://...","influence":"how it changed the ranking"}],"uncertainty":"what remains unknown"}`.
-Its kind must equal `tasksMeta.method`.
+Its kind must equal `tasksMeta.method`. The approval dialog summarizes only the
+basis kind as submitted/unverified; research sources and their influence appear
+in the tool result, not the dialog.
 Optional `expectedConfigRevision` (`sha256:` plus 64 lowercase hex digits of the exact file bytes,
-or `missing`) makes the write conditional; a stale revision fails with
+or `missing`) checks the proposal's starting snapshot; even when omitted,
+approval binds the exact snapshot shown. A change during approval fails with
 `Stale task model config revision`: re-read, re-propose, re-approve, do not
-retry blindly. Every write holds an advisory `config.json.lock`; a held lock
+retry blindly. Cooperating writes use an advisory `config.json.lock`; a held lock
 fails immediately with `Task model config writer busy`, and it is never broken
-automatically. Remove it only after confirming no writer is active.
+automatically. Remove it only after confirming no writer is active. A process
+ignoring the protocol can unlink it; approval is not a filesystem boundary.
+Reload may hide the selector but never approves a write. Shutdown or session
+replacement aborts pending approval and releases the gate, even if the hidden
+selector never resolves.
 
 ## Optional Herdr sidebar plugin
 

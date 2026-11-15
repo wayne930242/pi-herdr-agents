@@ -5395,7 +5395,7 @@ describe("model configuration", () => {
 		});
 	});
 
-	it("seeds from the packaged example and keeps every config section loadable", () => {
+	it("seeds only required settings and keeps every config section loadable", () => {
 		withTempDir((dir) => {
 			const configPath = join(dir, "herdr-agents", "config.json");
 			const examplePath = getSubagentsConfigExamplePath();
@@ -5451,9 +5451,7 @@ describe("model configuration", () => {
 			);
 			assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
 				status: { enabled: true },
-				roles: { bundled: false },
 				models: {
-					default: "fake/default",
 					tasks: { coding: ["fake/worker"] },
 					tasksMeta: {
 						generatedAt: "2026-09-17T00:00:00Z",
@@ -5752,13 +5750,11 @@ describe("conditional task model config writes", () => {
 				{ coding: ["fake/worker"] },
 				{ expectedConfigRevision: "missing" },
 			);
-			// Missing-file writes keep seeding packaged defaults.
+			// Missing-file writes seed only the required status setting and proposed models.
 			const written = JSON.parse(readFileSync(configPath, "utf8"));
-			const example = JSON.parse(
-				readFileSync(getSubagentsConfigExamplePath(), "utf8"),
-			);
-			for (const key of Object.keys(example).filter((key) => key !== "models"))
-				assert.deepEqual(written[key], example[key]);
+			assert.deepEqual(Object.keys(written), ["status", "models"]);
+			assert.deepEqual(written.status, { enabled: true });
+			assert.deepEqual(written.models.tasks, { coding: ["fake/worker"] });
 			assert.equal(saved.configRevision, readConfigRevision(configPath));
 
 			const existing = readFileSync(configPath, "utf8");
@@ -10468,6 +10464,8 @@ describe("completion.ts", () => {
 /** An idle command context with the given registry; notifications are recorded. */
 function initContext(modelRegistry: any, notifications: string[] = []) {
 	return {
+		hasUI: true,
+		mode: "tui",
 		modelRegistry,
 		model: { provider: "p", id: "m" },
 		isIdle: () => true,
@@ -11188,6 +11186,9 @@ describe("commands", () => {
 					undefined,
 					undefined,
 					{
+						hasUI: true,
+						mode: "tui",
+						ui: { select: async () => "Yes, save" },
 						modelRegistry: {
 							find: () => INIT_MODEL,
 							getAvailable: () => [INIT_MODEL],
@@ -11287,10 +11288,17 @@ describe("commands", () => {
 			const model = { provider: "fake", id: "worker", reasoning: false };
 			const result = await writer.execute(
 				"init-write",
-				{ tasks: { coding: [" fake/worker "] }, tasksMeta },
+				{
+					tasks: { coding: [" fake/worker "] },
+					tasksThinking: { coding: "high" },
+					tasksMeta,
+				},
 				undefined,
 				undefined,
 				{
+					hasUI: true,
+					mode: "tui",
+					ui: { select: async () => "Yes, save" },
 					modelRegistry: {
 						find: (provider: string, id: string) =>
 							provider === "fake" && id === "worker" ? model : undefined,
@@ -11302,6 +11310,7 @@ describe("commands", () => {
 			assert.deepEqual(result.details, {
 				configPath,
 				tasks: { coding: ["fake/worker"] },
+				tasksThinking: { coding: "high" },
 				tasksMeta,
 				missingCategories: ["complex-coding", "review", "recon", "qa", "architecture", "docs"],
 				configRevision: readConfigRevision(configPath),
@@ -11318,6 +11327,7 @@ describe("commands", () => {
 					default: "fake/default",
 					agents: { scout: "fake/scout" },
 					tasks: { coding: ["fake/worker"] },
+					tasksThinking: { coding: "high" },
 					tasksMeta,
 				},
 			});
@@ -11399,6 +11409,9 @@ describe("commands", () => {
 					getAvailable: () => [model],
 					hasConfiguredAuth: () => true,
 				},
+				hasUI: true,
+				mode: "tui",
+				ui: { select: async () => "Yes, save" },
 			};
 			const tasks = { coding: ["fake/worker"] };
 			const research = {
@@ -11529,6 +11542,9 @@ describe("commands", () => {
 					getAvailable: () => [model],
 					hasConfiguredAuth: () => true,
 				},
+				hasUI: true,
+				mode: "tui",
+				ui: { select: async () => "Yes, save" },
 			};
 			const tasksMeta = {
 				generatedAt: "2026-10-05T00:00:00Z",
