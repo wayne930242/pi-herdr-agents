@@ -37,6 +37,7 @@ import {
 	createWorktreeSessionFork,
 	seedSubagentSessionFile,
 	writeSubagentSessionPolicy,
+	writeSubagentSystemPrompt,
 	type SubagentSessionPolicyV2,
 } from "./session.ts";
 import {
@@ -816,6 +817,12 @@ function prepareTaskArtifacts(
 		);
 		mkdirSync(dirname(systemPromptFile), { recursive: true });
 		writeFileSync(systemPromptFile, identityInSystemPrompt, "utf8");
+		// Resume passes the same prompt again, so its system prompt never changes.
+		writeSubagentSystemPrompt(session.sessionFile, {
+			mode:
+				request.behavior.systemPromptMode === "replace" ? "replace" : "append",
+			prompt: identityInSystemPrompt,
+		});
 	}
 	// A file, never the raw command in the launch environment or script.
 	let acceptFile: string | undefined;

@@ -857,6 +857,44 @@ describe("PiHarnessAdapter", () => {
 			assert.ok(promptPath);
 			assert.equal(readFileSync(promptPath, "utf8"), "Override identity");
 		}));
+	for (const mode of ["append", "replace"] as const)
+		it(`resume passes the launch's ${mode} system prompt again, with the same content`, async () =>
+			usingFixture(async (f) => {
+				const commands: string[] = [];
+				f.operations.runScript = (_surface, value, options) => {
+					commands.push(value);
+					return options.scriptPath;
+				};
+				const flag =
+					mode === "replace" ? "--system-prompt" : "--append-system-prompt";
+				const h = await f.adapter.spawn({
+					...f.options,
+					systemPrompt: "Stable identity addendum",
+					role: {
+						...f.options.role,
+						defaults: {
+							...f.options.role.defaults,
+							systemPromptMode: mode,
+						},
+					},
+				});
+				const re = new RegExp(`${flag} '([^']+)'`);
+				assert.ok(re.test(commands.at(-1) ?? ""));
+				writeFileSync(
+					h.sessionId,
+					JSON.stringify({
+						type: "session",
+						version: 3,
+						id: h.id,
+						cwd: f.root,
+					}) + "\n",
+				);
+				await f.adapter.kill(h);
+				await f.adapter.resume({ name: "resumed", sessionId: h.sessionId });
+				const path = (commands.at(-1) ?? "").match(re)?.[1];
+				assert.ok(path, "resume must pass the system prompt flag");
+				assert.equal(readFileSync(path, "utf8"), "Stable identity addendum");
+			}));
 	it("projects activity and preserves interrupted-turn precedence without inferring process completion", async () =>
 		usingFixture(async (f) => {
 			const h = await f.adapter.spawn(f.options);

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { after, describe, it } from "node:test";
 import {
 	type AgentSession,
@@ -48,11 +47,6 @@ after(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(
-	/\/$/,
-	"",
-);
-
 const ROUTINE: readonly string[] = [
 	"subagent",
 	"subagent_resume",
@@ -66,8 +60,6 @@ const ROUTINE: readonly string[] = [
 ];
 const WRITER = "subagents_write_task_models";
 const COORDINATOR_RULE = "Act as the coordinator.";
-const NAMING_RULE = "choose a short task slug";
-const LOAD_SUBAGENT = "launch subagent model thinking";
 
 type SearchMode = "native" | "inline" | "impostor" | "none";
 
@@ -260,55 +252,26 @@ async function openSession(options: {
 const hostTools = (names: readonly string[]) =>
 	names.filter((name) => ROUTINE.includes(name) || name === WRITER);
 
-describe("routine host tools are deferred to Pi's native tool_search", () => {
-	it("keeps host schemas, guidelines, and the catalog out until a search loads only its matches", async () => {
+describe("routine host tools are declared directly from the start", () => {
+	it("declares the host tools in the first request and never rebuilds the system prompt", async () => {
 		const run = await openSession({ search: "native" });
 		try {
 			assert.deepEqual(
-				hostTools(run.session.getActiveToolNames()),
-				[],
-				"no host tool is active after startup",
+				[...hostTools(run.session.getActiveToolNames())].sort(),
+				[...ROUTINE].sort(),
+				"every routine host tool is active after startup",
 			);
-			assert.ok(run.session.getActiveToolNames().includes("tool_search"));
-			await run.prompt(
-				"Delegate this.",
-				search(LOAD_SUBAGENT),
-				search("persistent specialist follow-up task"),
-				search("write task model preferences models.tasks tasksMeta", 8),
-				reply,
-			);
-			const [first, second, third, fourth] = run.requests;
-
-			assert.ok(first.tools.includes("tool_search"));
-			assert.deepEqual(hostTools(first.tools), []);
-			assert.doesNotMatch(
-				// Pi's docs block names its install path, which can contain these
-				// words (for example a checkout under ~/.herdr/worktrees).
-				first.payload.replaceAll(PACKAGE_ROOT, "<package-root>"),
-				/subagent|worktree|coordinator|model catalog|faux\/m/i,
-				"the first request carries no host schema, guideline, or catalog",
-			);
-
-			assert.deepEqual(hostTools(second.tools), ["subagent"]);
-			assert.match(second.toolResult ?? "", /Loaded 1 tool/);
-			assert.ok(second.prompt.includes(COORDINATOR_RULE));
-			assert.ok(second.prompt.includes(NAMING_RULE));
-			assert.match(
+			await run.prompt("Delegate this.", reply);
+			await run.prompt("Again.", reply);
+			const [first, second] = run.requests;
+			assert.deepEqual([...hostTools(first.tools)].sort(), [...ROUTINE].sort());
+			assert.ok(first.prompt.includes(COORDINATOR_RULE));
+			assert.equal(
 				second.prompt,
-				/faux\/m/,
-				"the current session's model catalog arrives with subagent",
+				first.prompt,
+				"the system prompt must not change between requests (prompt-cache stability)",
 			);
-			assert.doesNotMatch(second.prompt, /model catalog becomes available/);
-			assert.deepEqual(
-				hostTools(third.tools),
-				["subagent", "subagent_send"],
-				"optional controls are discoverable one search at a time",
-			);
-			assert.ok(
-				!fourth.tools.includes(WRITER),
-				"the init-only writer is never found by search",
-			);
-			assert.doesNotMatch(fourth.toolResult ?? "", new RegExp(WRITER));
+			assert.ok(!first.tools.includes(WRITER));
 		} finally {
 			run.dispose();
 		}
@@ -333,9 +296,9 @@ describe("routine host tools are deferred to Pi's native tool_search", () => {
 			const [init] = run.requests;
 			assert.ok(init.tools.includes(WRITER), "init activates the writer");
 			assert.deepEqual(
-				hostTools(init.tools),
-				[WRITER],
-				"init loads no routine tool",
+				[...hostTools(init.tools)].sort(),
+				[...ROUTINE, WRITER].sort(),
+				"init adds only the writer to the direct routine tools",
 			);
 		} finally {
 			run.dispose();
@@ -354,7 +317,7 @@ describe("routine host tools are deferred to Pi's native tool_search", () => {
 		}
 	});
 
-	it("keeps loaded tools and search active across reload and resume", async () => {
+	it("keeps the host tools declared across reload and resume", async () => {
 		const sessionDir = join(root, "resume-sessions");
 		let file: string | undefined;
 		const run = await openSession({
@@ -366,12 +329,15 @@ describe("routine host tools are deferred to Pi's native tool_search", () => {
 			},
 		});
 		try {
-			await run.prompt("Delegate this.", search(LOAD_SUBAGENT), reply);
+			await run.prompt("Delegate this.", reply);
 			await run.reload();
 			await run.prompt("After reload.", reply);
-			const afterReload = run.requests.at(-1)!;
-			assert.ok(afterReload.tools.includes("tool_search"));
-			assert.deepEqual(hostTools(afterReload.tools), ["subagent"]);
+			const [before, afterReload] = run.requests;
+			assert.deepEqual(
+				[...hostTools(afterReload.tools)].sort(),
+				[...ROUTINE].sort(),
+			);
+			assert.equal(afterReload.prompt, before.prompt);
 		} finally {
 			run.dispose();
 		}
@@ -379,29 +345,15 @@ describe("routine host tools are deferred to Pi's native tool_search", () => {
 		const resumed = await openSession({
 			search: "native",
 			sessionManager: () => SessionManager.open(file!, sessionDir),
-			// Pi restores the transcript's loadout on resume; this SDK's
-			// createAgentSession always passes initial tools, so restore it the
-			// same way before session_start runs.
-			beforeStart(session) {
-				const restored = getCurrentTools(
-					session.sessionManager.buildSessionContext().messages,
-				).map((tool) => tool.name);
-				assert.ok(restored.includes("subagent"));
-				session.setActiveToolsByName(
-					restored.filter((name) => name !== "tool_search"),
-				);
-			},
 		});
 		try {
-			await resumed.prompt("After resume.", search("worktree", 1), reply);
-			const [request, next] = resumed.requests;
-			assert.ok(
-				request.tools.includes("tool_search"),
-				"session_start reactivates search without dropping restored tools",
+			await resumed.prompt("After resume.", reply);
+			const [request] = resumed.requests;
+			assert.deepEqual(
+				[...hostTools(request.tools)].sort(),
+				[...ROUTINE].sort(),
 			);
-			assert.deepEqual(hostTools(request.tools), ["subagent"]);
 			assert.ok(request.prompt.includes(COORDINATOR_RULE));
-			assert.equal(hostTools(next.tools).length, 2, "search still loads");
 		} finally {
 			resumed.dispose();
 		}
@@ -591,7 +543,7 @@ describe("deferred tool registration (mock API)", () => {
 		parameters: object;
 	};
 
-	it("registers the routine tools deferred and the writer direct and inactive", () =>
+	it("registers the routine tools direct and the writer direct and inactive", () =>
 		withEnv(
 			{ PI_SUBAGENT_ID: undefined, PI_DENY_TOOLS: undefined },
 			async () => {
@@ -600,13 +552,16 @@ describe("deferred tool registration (mock API)", () => {
 				const exposures = Object.fromEntries(
 					registeredTools.map((tool) => [tool.name, tool.exposure]),
 				);
-				for (const name of ROUTINE) assert.equal(exposures[name], "deferred");
+				for (const name of ROUTINE) assert.equal(exposures[name], "direct");
 				assert.equal(exposures[WRITER], undefined);
 				assert.equal(
 					registeredTools.find((tool) => tool.name === WRITER).defaultActive,
 					false,
 				);
-				assert.deepEqual(hostTools(api.getActiveTools()), []);
+				assert.deepEqual(
+					[...hostTools(api.getActiveTools())].sort(),
+					[...ROUTINE].sort(),
+				);
 			},
 		));
 

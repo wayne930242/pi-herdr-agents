@@ -1,10 +1,14 @@
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 /**
- * Routine host tools register with this exposure. Pi keeps their schemas and
- * prompt guidelines out of requests until its built-in `tool_search` loads them.
+ * Routine host tools register with this exposure. They are declared from the
+ * first request: a `deferred` tool that `tool_search` loads mid-session makes
+ * Pi rebuild the system prompt, which breaks the provider's prompt cache.
  */
-export const ROUTINE_TOOL_EXPOSURE = "deferred" as const;
+export const ROUTINE_TOOL_EXPOSURE = "direct" as const;
+
+/** The exposure whose tools {@link trackDeferredTools} keeps reachable. */
+const DEFERRED_EXPOSURE = "deferred" as const;
 
 const TOOL_SEARCH_NAME = "tool_search";
 /** The path Pi gives tools registered by its built-in tool-search extension. */
@@ -67,7 +71,7 @@ export interface DeferredTools {
 export function trackDeferredTools(pi: ExtensionAPI): DeferredTools {
 	const owned = new Map<string, unknown>();
 	const registerTool: ExtensionAPI["registerTool"] = (tool) => {
-		if (tool.exposure === ROUTINE_TOOL_EXPOSURE)
+		if (tool.exposure === DEFERRED_EXPOSURE)
 			owned.set(tool.name, tool.parameters);
 		pi.registerTool(tool);
 	};

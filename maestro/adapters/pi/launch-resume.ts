@@ -13,6 +13,7 @@ import {
 	findStoredSessionModel,
 	getNewEntries,
 	readSubagentSessionPolicy,
+	readSubagentSystemPrompt,
 } from "./session.ts";
 import {
 	buildSubagentToolAllowlist,
@@ -120,6 +121,24 @@ export async function launchResumedPiSubagent(
 			writeFileSync(messageFile, request.message, "utf8");
 		}
 
+		let systemPromptArgs: string[] = [];
+		const savedPrompt = readSubagentSystemPrompt(request.sessionFile);
+		if (savedPrompt) {
+			const promptFile = join(
+				artifactDir,
+				"subagent-resume",
+				`${safeName(request.name) || "resume"}-sysprompt-${timestampForFile(false)}.md`,
+			);
+			mkdirSync(dirname(promptFile), { recursive: true });
+			writeFileSync(promptFile, savedPrompt.prompt, "utf8");
+			systemPromptArgs = [
+				savedPrompt.mode === "replace"
+					? "--system-prompt"
+					: "--append-system-prompt",
+				shellQuote(promptFile),
+			];
+		}
+
 		const env = [
 			...(process.env.PI_CODING_AGENT_DIR
 				? [`PI_CODING_AGENT_DIR=${shellQuote(process.env.PI_CODING_AGENT_DIR)}`]
@@ -151,6 +170,7 @@ export async function launchResumedPiSubagent(
 			shellQuote(request.sessionFile),
 			...(pinnedModel ? ["--model", shellQuote(pinnedModel)] : []),
 			...scopeArgs,
+			...systemPromptArgs,
 			...(toolAllowlist ? ["--tools", shellQuote(toolAllowlist)] : []),
 			"-e",
 			shellQuote(join(SUBAGENTS_DIR, "child", "subagent-done.ts")),

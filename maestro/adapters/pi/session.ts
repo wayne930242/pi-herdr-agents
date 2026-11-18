@@ -137,6 +137,54 @@ export function getSubagentSessionPolicyFile(sessionFile: string): string {
 	return `${sessionFile}${SUBAGENT_POLICY_SUFFIX}`;
 }
 
+/** The system-prompt flag and content a launch passed, kept for resume. */
+export interface SubagentSystemPromptRecord {
+	mode: "append" | "replace";
+	prompt: string;
+}
+
+export function getSubagentSystemPromptFile(sessionFile: string): string {
+	return `${sessionFile}.system-prompt.json`;
+}
+
+export function writeSubagentSystemPrompt(
+	sessionFile: string,
+	record: SubagentSystemPromptRecord,
+): void {
+	writeFileSync(
+		getSubagentSystemPromptFile(sessionFile),
+		`${JSON.stringify(record)}\n`,
+		"utf8",
+	);
+}
+
+/** The launch's system prompt, or undefined when it passed none. */
+export function readSubagentSystemPrompt(
+	sessionFile: string,
+): SubagentSystemPromptRecord | undefined {
+	let value: JsonValue;
+	try {
+		value = JSON.parse(
+			readFileSync(getSubagentSystemPromptFile(sessionFile), "utf8"),
+		);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT")
+			return undefined;
+		throw new Error(
+			`Cannot resume ${sessionFile}: the saved system prompt cannot be read.`,
+		);
+	}
+	if (
+		!isPolicyRecord(value) ||
+		(value.mode !== "append" && value.mode !== "replace") ||
+		!isString(value.prompt)
+	)
+		throw new Error(
+			`Cannot resume ${sessionFile}: the saved system prompt is malformed.`,
+		);
+	return { mode: value.mode, prompt: value.prompt };
+}
+
 export function getPersistentTaskEventsFile(sessionFile: string): string {
 	return `${sessionFile}.tasks`;
 }

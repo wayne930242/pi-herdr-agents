@@ -72,7 +72,7 @@ Desktop Agents tabs/sidebar visual parity; that presentation is not implemented.
 
 ## Tool loading
 
-The nine routine tools (`subagent`, `subagent_resume`, `subagent_interrupt`, `subagent_cancel`, `subagent_send`, `subagent_stop`, `subagents_list`, `worktree_list`, and `worktree_remove`) register with Pi's `deferred` [tool exposure](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure). Their schemas stay out of model requests until Pi's built-in `tool_search` loads them. The same applies to the `subagent` guidelines, which include the [model catalog](configuration.md#model-catalog-in-the-prompt). When a session starts, the host activates `tool_search` and leaves every other active or restored tool as it was. A search such as `tool_search({ query: "subagent" })` or `tool_search({ query: "worktree" })` declares the matching tools for the next model call. Pi records loaded tools in the transcript, so they stay declared after `/reload`, and after a resume on that branch.
+The nine routine tools (`subagent`, `subagent_resume`, `subagent_interrupt`, `subagent_cancel`, `subagent_send`, `subagent_stop`, `subagents_list`, `worktree_list`, and `worktree_remove`) register with Pi's `direct` [tool exposure](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#tool-exposure): their schemas and the `subagent` guidelines, which include the [model catalog](configuration.md#model-catalog-in-the-prompt), are declared from the first request. They are not deferred because a tool that `tool_search` loads mid-session makes Pi rebuild the system prompt, which invalidates the provider's prompt cache.
 
 Pi's tool policy decides which host tools exist, and the host never adds a tool the policy removed:
 
@@ -82,9 +82,9 @@ Pi's tool policy decides which host tools exist, and the host never adds a tool 
 - Pi does not report the per-invocation `--tools -tool_search` to extensions, so the host still activates search under it. Use `--exclude-tools tool_search` to turn search off for one run.
 - The host recognizes Pi's search by the source Pi reports for it (`builtin:tool-search`), never by name alone, and activates only tools it registered itself.
 
-Codemode scripts can call registered `deferred` tools without loading them, as Pi allows for every deferred tool. The removal rules above still decide which host tools are registered.
+The removal rules above decide which host tools are registered.
 
-`subagents_write_task_models` is not deferred. It is a direct tool registered inactive, `tool_search` never finds it, and only `/subagents-init` activates it; see [Task-model writer](configuration.md#task-model-writer). The child-only `caller_ping`, `subagent_done` and `caller_notify` tools are declared directly, as before; `caller_notify` exists only in a persistent specialist launched with `notify: true`.
+`subagents_write_task_models` is a direct tool registered inactive, `tool_search` never finds it, and only `/subagents-init` activates it; see [Task-model writer](configuration.md#task-model-writer). The child-only `caller_ping`, `subagent_done` and `caller_notify` tools are declared directly, as before; `caller_notify` exists only in a persistent specialist launched with `notify: true`.
 
 ## Async Subagent Flow
 
