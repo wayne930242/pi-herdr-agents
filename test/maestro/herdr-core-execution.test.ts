@@ -1,4 +1,5 @@
 import "../isolated-agent-dir.ts";
+import { hostSurfaceBinding } from "../../pi-extension/subagents/host-surface.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
@@ -19,44 +20,31 @@ import { type CoreTerminal } from "../../maestro/surfaces/herdr/herdr-core-proto
 import {
 	parseHerdrConfig,
 	loadHerdrConfig,
-	selectHerdrBinding,
-	assertSameHerdrBinding,
-} from "../../maestro/core/config/herdr-config.ts";
-import {
-	AcquisitionUncertainError,
-	isAcquisitionUncertainError,
-} from "../../maestro/core/surface-provider.ts";
+} from "@nubl/maestro/core/config/herdr-config";
+import { isAcquisitionUncertainError } from "@nubl/maestro/core/surface-provider";
 import {
 	launchPiSubagent,
 	AcquiredPiLaunchError,
 	type FreshPiLaunchRequest,
 	type PiLaunchRequest,
-} from "../../maestro/adapters/pi/launch.ts";
-import { launchOperationsFromSurface } from "../../maestro/adapters/pi/launch-operations.ts";
-import { waitForCompletion } from "../../maestro/adapters/pi/completion.ts";
-import {
-	createLifecycle,
-	lifecycleTransition,
-	observePaneInspection,
-	projectLifecycle,
-	type LifecycleProjection,
-	type LifecycleTransition,
-} from "../../maestro/core/lifecycle.ts";
+} from "@nubl/maestro/adapters/pi/launch";
+import { launchOperationsFromSurface } from "@nubl/maestro/adapters/pi/launch-operations";
+import { waitForCompletion } from "@nubl/maestro/adapters/pi/completion";
 import {
 	getNewEntries,
 	readPersistentDeliveryLedger,
 	writeSubagentSessionPolicy,
 	getSubagentSessionPolicyFile,
-} from "../../maestro/adapters/pi/session.ts";
-import { createDefaultRunSession } from "../../maestro/runtime/pi-run-session.ts";
+} from "@nubl/maestro/adapters/pi/session";
+import { createDefaultRunSession } from "@nubl/maestro/runtime/pi-run-session";
 import type {
 	DefaultRunSessionOptions,
 	PiLaunchInput,
 	PiRunSession,
 	PiCompletedMetadata,
-} from "../../maestro/runtime/pi-run-session-types.ts";
-import { FileWakeRegistry } from "../../maestro/core/wake.ts";
-import { SupervisionCoordinator } from "../../maestro/core/supervision.ts";
+} from "@nubl/maestro/runtime/pi-run-session-types";
+import { FileWakeRegistry } from "@nubl/maestro/core/wake";
+import { SupervisionCoordinator } from "@nubl/maestro/core/supervision";
 import { socketPath as fixtureSocketPath } from "../socket-path.ts";
 import { skipCoreOnWindows } from "../helpers/windows-scope.ts";
 
@@ -468,68 +456,6 @@ test("Core config is closed, strict, defaults auto, and rejects malformed files"
 		assert.equal(loadHerdrConfig(f.dir, example), "core");
 		assert.equal(f.calls.length, 0);
 	}));
-test("Core auto selection requires native terminal context and prefers terminal endpoint", () => {
-	// Selection where Core is supported; Windows refuses Core itself
-	// (windows-support-scope.test.ts).
-	const linux = "linux";
-	assert.deepEqual(
-		selectHerdrBinding("auto", { HC_SOCKET: "/socket", HERDR_ENV: "1" }, linux),
-		{ backend: "legacy" },
-	);
-	assert.deepEqual(
-		selectHerdrBinding("legacy", { HC_TERMINAL_ID: "t1" }, linux),
-		{
-			backend: "legacy",
-		},
-	);
-	assert.deepEqual(
-		selectHerdrBinding(
-			"auto",
-			{
-				HC_TERMINAL_ID: "t1",
-				HC_TERMINAL_SOCKET: "/preferred",
-				HC_SOCKET: "/fallback",
-			},
-			linux,
-		),
-		{ backend: "core", socket: "/preferred", parentTerminal: "t1" },
-	);
-	assert.deepEqual(
-		selectHerdrBinding(
-			"core",
-			{
-				HC_TERMINAL_ID: "t1",
-				HC_SOCKET: "/fallback",
-			},
-			linux,
-		),
-		{ backend: "core", socket: "/fallback", parentTerminal: "t1" },
-	);
-	for (const env of [
-		{},
-		{ HC_SOCKET: "/only" },
-		{ HC_TERMINAL_ID: "remote/t1", HC_SOCKET: "/x" },
-		{ HC_TERMINAL_ID: "t1", HC_SOCKET: "relative" },
-		{ HC_TERMINAL_ID: "t1" },
-	])
-		assert.throws(
-			() => selectHerdrBinding("core", env, linux),
-			/native HC_TERMINAL_ID/,
-		);
-	assert.throws(
-		() => selectHerdrBinding("auto", { HC_TERMINAL_ID: "t1" }, linux),
-		/native HC_TERMINAL_ID/,
-	);
-	assertSameHerdrBinding({ backend: "legacy" }, { backend: "legacy" });
-	assert.throws(
-		() =>
-			assertSameHerdrBinding(
-				{ backend: "legacy" },
-				{ backend: "core", socket: "/x", parentTerminal: "t1" },
-			),
-		/restart/,
-	);
-});
 
 test("Core provider is lazy; native start verifies hello and parent, uses atomic background payload", () =>
 	fixture(async (f) => {
@@ -1146,51 +1072,6 @@ test("Core worktree/handoff/UI requests are rejected before Git, artifact or RPC
 		assert.equal(f.calls.length, 0);
 	}));
 
-test("Core execution-start uncertainty remains structurally recognizable across reloads", () => {
-	assert.ok(
-		isAcquisitionUncertainError(
-			new AcquisitionUncertainError("owned", {
-				kind: "execution-start",
-				observedSurfaceId: "t2",
-				acquiredSurfaceId: "t2",
-			}),
-		),
-	);
-	for (const observedSurfaceId of [undefined, "t3"])
-		assert.equal(
-			isAcquisitionUncertainError(
-				new AcquisitionUncertainError("invalid", {
-					kind: "execution-start",
-					observedSurfaceId,
-					acquiredSurfaceId: "t2",
-				}),
-			),
-			false,
-		);
-	assert.ok(
-		isAcquisitionUncertainError(
-			new AcquisitionUncertainError("uncertain", { kind: "execution-start" }),
-		),
-	);
-	assert.ok(
-		isAcquisitionUncertainError(
-			new AcquisitionUncertainError("uncertain", {
-				kind: "execution-start",
-				observedSurfaceId: "t2",
-			}),
-		),
-	);
-	assert.equal(
-		isAcquisitionUncertainError({
-			code: "PIHA_ACQUISITION_UNCERTAIN",
-			name: "Error",
-			message: "x",
-			uncertainty: { kind: "execution-start", observedSurfaceId: "user/name" },
-		}),
-		false,
-	);
-});
-
 for (const persistent of [false, true])
 	test(`Core ${persistent ? "persistent" : "ordinary"} sidecar/live status/sentinel cannot release lifetime before exit`, () =>
 		fixture(async (f) => {
@@ -1229,56 +1110,6 @@ for (const persistent of [false, true])
 			assert.equal(existsSync(`${child.sessionFile}.exit`), false);
 		}));
 
-test("Core finished native exit admits interactive sentinel only after exit and with matching code", async () => {
-	for (const code of [0, 7]) {
-		const result = await waitForCompletion(new AbortController().signal, {
-			intervalMs: 1,
-			paneDisappearanceGraceMs: 0,
-			inspectExecution: async () => ({ kind: "finished", exitCode: code }),
-			readTerminalTail: async () => `__SUBAGENT_DONE_${code}__`,
-		});
-		assert.equal(result.reason, "sentinel");
-		assert.equal(result.exitCode, code);
-	}
-	const stale = await waitForCompletion(new AbortController().signal, {
-		intervalMs: 1,
-		paneDisappearanceGraceMs: 0,
-		inspectExecution: async () => ({ kind: "finished", exitCode: 9 }),
-		readTerminalTail: async () => "__SUBAGENT_DONE_0__",
-	});
-	assert.equal(stale.reason, "error");
-	assert.equal(stale.exitCode, 9);
-});
-
-for (const nativeKind of ["finished", "missing"] as const)
-	for (const exitCode of [0, 7, undefined])
-		for (const unreadable of [false, true])
-			test(`Core ${nativeKind} exit ${exitCode} without completion evidence preserves native code (unreadable=${unreadable})`, async () => {
-				const result = await waitForCompletion(new AbortController().signal, {
-					intervalMs: 1,
-					paneDisappearanceGraceMs: 0,
-					inspectExecution: async () => ({ kind: nativeKind, exitCode }),
-					readTerminalTail: async () => {
-						if (unreadable) throw new Error("read unavailable");
-						return "";
-					},
-				});
-				assert.equal(
-					result.reason,
-					"error",
-					"process exit alone is not task success",
-				);
-				assert.equal(
-					result.exitCode,
-					nativeKind === "finished" ? (exitCode ?? 1) : 1,
-				);
-				assert.equal(result.errorSource, "host");
-				assert.match(
-					result.errorMessage!,
-					/native execution ended before completion evidence/,
-				);
-			});
-
 test("Core unavailable exit evidence preserves sidecar and owner until aborted", () =>
 	fixture(async (f) => {
 		const file = join(f.dir, "session.jsonl");
@@ -1300,50 +1131,6 @@ test("Core unavailable exit evidence preserves sidecar and owner until aborted",
 		);
 		assert.equal(existsSync(`${file}.exit`), true);
 	}));
-
-for (const throws of [false, true])
-	test(`Core ${throws ? "throwing" : "unavailable"} native inspection stalls and live inspection recovers`, async (t) => {
-		t.mock.timers.enable({ apis: ["Date"], now: 1000 });
-		const abort = new AbortController();
-		let lifecycle = createLifecycle(Date.now());
-		let inspections = 0;
-		let terminalReads = 0;
-		const projections: LifecycleProjection["kind"][] = [];
-		const transitions: LifecycleTransition[] = [];
-		await assert.rejects(
-			waitForCompletion(abort.signal, {
-				intervalMs: 1,
-				inspectExecution: async () => {
-					if (++inspections === 3) return { kind: "live" };
-					if (throws) throw new Error("Core disconnected");
-					return { kind: "unavailable", error: "Core disconnected" };
-				},
-				onPaneInspection: (inspection, at) => {
-					assert.equal(at, Date.now());
-					lifecycle = observePaneInspection(lifecycle, inspection, at);
-					const projection = projectLifecycle(lifecycle, at);
-					transitions.push(
-						lifecycleTransition(projections.at(-1), projection.kind),
-					);
-					projections.push(projection.kind);
-				},
-				waitForNextCheck: async () => {
-					t.mock.timers.tick(60_001);
-					if (inspections === 3) abort.abort();
-					return "reconcile";
-				},
-				readTerminalTail: async () => {
-					terminalReads++;
-					return "__SUBAGENT_DONE_0__";
-				},
-			}),
-			/Aborted/,
-		);
-		assert.equal(inspections, 3);
-		assert.equal(terminalReads, 0);
-		assert.deepEqual(projections, ["starting", "stalled", "running"]);
-		assert.deepEqual(transitions, [null, "stalled", "recovered"]);
-	});
 
 for (const nativeKind of ["finished", "missing"] as const)
 	test(`Core ${nativeKind} supports delayed sidecar grace and crash without one`, () =>
@@ -1457,7 +1244,10 @@ test("Core native binding survives reload; changed endpoint/backend fails before
 			config,
 			JSON.stringify({ herdr: { backend: "core" }, panes }),
 		);
-		const options = sessionOptions(f, false);
+		const options = {
+			...sessionOptions(f, false),
+			hostSurface: hostSurfaceBinding,
+		};
 		const nativeEnv = {
 			HC_TERMINAL_ID: "t1",
 			HC_TERMINAL_SOCKET: f.socketPath,

@@ -1,7 +1,7 @@
 # Pi Herdr Agents
 
 [![npm version](https://img.shields.io/npm/v/pi-herdr-agents)](https://www.npmjs.com/package/pi-herdr-agents)
-[![CI](https://github.com/giuseppecrj/pi-herdr-agents/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/giuseppecrj/pi-herdr-agents/actions/workflows/ci.yml)
+[![CI](https://github.com/giuseppecrj/pi-herdr-agents/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/giuseppecrj/pi-herdr-agents/actions/workflows/check.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ![Pi Herdr Agents: a parent Pi session delegating to parallel child agents in dedicated Herdr panes, an isolated worktree and a retained session, with a live status widget.](https://raw.githubusercontent.com/giuseppecrj/pi-herdr-agents/main/docs/assets/pi-herdr-agents-gallery.png)
@@ -34,6 +34,9 @@ Delegate investigation, implementation, and review without blocking the parent s
 ## Requirements
 
 - [Pi](https://github.com/earendil-works/pi) with package support
+- Node.js 22.19 or later (Pi's own floor). The subagent engine ships as the
+  [`@nubl/maestro`](https://www.npmjs.com/package/@nubl/maestro) dependency and
+  installs with this package.
 - Either legacy [Herdr](https://herdr.dev) and its CLI (`HERDR_ENV=1`), or a
   local Herdr Core terminal with its native `HC_TERMINAL_ID` and socket context.
 
@@ -74,6 +77,10 @@ For Core/Desktop, run `pi` in an existing local Core terminal instead. Restart
 Pi when switching backends or upgrading from a runtime without backend binding;
 ordinary reloads retain the selected backend and live ownership. Review package
 source before you install any Pi package.
+
+**Upgrading:** let running subagents finish (or stop them), update the package,
+then restart Pi. `/reload` keeps the previously loaded engine code until Pi
+restarts.
 
 ### Optional methodology pack
 
@@ -364,10 +371,6 @@ npm pack --dry-run
 
 Run the legacy deterministic integration suite from inside isolated Herdr with `npm run test:integration`. The independent `npm run test:integration:core` creates private Core servers and drives real parent Pi sessions without provider credentials. See [Development](docs/development.md) for the code map, tool versions, and the optional live-provider test, and [RELEASING.md](RELEASING.md) for releases.
 
-## Acknowledgements
-
-This package builds on earlier open-source work by [HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents) and [0xRichardH/pi-herdr-subagents](https://github.com/0xRichardH/pi-herdr-subagents). The sub-agent status supervision and turn-only interruption features were inspired by [RepoPrompt](https://repoprompt.com/)'s sub-agent snapshot polling and run cancellation features.
-
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright notice retained from the upstream lineage (`HazAT`).
+MIT, see [LICENSE](LICENSE).

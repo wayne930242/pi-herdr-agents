@@ -194,7 +194,7 @@ subagent({
 | `agent` | string | no | Role definition to load defaults from (see subagents_list). Omit for a bare agent. |
 | `systemPrompt` | string | no | Role/system-prompt text for a bare spawn. Named agents keep their definition body. |
 | `model` | string | no | Exact authenticated provider/model-id, a comma-separated fallback list, or task:\<category> as the whole value. Worktree launches take one model: a task: category uses its first candidate, and fallback lists are rejected. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. |
-| `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | no | Pi thinking level, within the chosen model's supported range. Overrides task-category thinking (clamped per candidate), then role thinking, then parent. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses those defaults in that order; an installed extension may set the child's level from solutionSpace instead. |
+| `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | no | Pi thinking level, within the chosen model's supported range. Overrides task-category thinking (clamped per candidate), then role thinking, then parent. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses task-category thinking, then the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead. |
 | `solutionSpace` | string | no | One or two sentences on how open-ended the work is, not the work itself: whether the fix or design is given, or which causes or designs remain open. The child receives it as PI_SUBAGENT_SOLUTION_SPACE, where an installed extension can choose the child's thinking level from it. |
 | `skills` | string | no | Comma-separated skills (overrides agent default) |
 | `tools` | string | no | Comma-separated tools (overrides agent default) |
@@ -363,8 +363,13 @@ A persistent completion sidecar records the child's intended outcome before
 shutdown. It does not prove process exit. The host retains lifetime ownership
 until a verified process identity has exited, the shell has emitted its post-exit
 marker, or pane absence confirms termination when no identity is known alive.
-A known-live identity prevents a stale marker or missing pane from establishing
-exit. Task events can still arrive while shutdown is pending.
+In a legacy Herdr pane, a persistent child's launch line also writes Pi's exit
+code to `<session>.shell-exit` after Pi returns. That record proves exit even
+when a tall or wrapped shell prompt has pushed the on-screen marker out of the
+terminal read; without a captured process identity, as on macOS, the two are the
+only exit evidence for an open pane. A known-live identity prevents a stale
+marker, record, or missing pane from establishing exit. Task events can still
+arrive while shutdown is pending.
 
 A persistent specialist with a worktree holds that lease for its entire lifetime. It cannot be re-bound to another checkout. Otherwise it runs in an ordinary pane.
 

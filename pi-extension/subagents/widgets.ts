@@ -1,38 +1,39 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { SupervisionConfig } from "../../maestro/core/config/supervision-config.ts";
-import { encodeHostValue } from "../../maestro/core/host-text.ts";
+import type { SupervisionConfig } from "@nubl/maestro/core/config/supervision-config";
+import { encodeHostValue } from "@nubl/maestro/core/host-text";
 import {
 	capStatusLines,
 	formatElapsedDuration,
 	formatStatusAggregate,
 	normalizeStatusName,
 	type StatusConfig,
-} from "../../maestro/core/status.ts";
+} from "@nubl/maestro/core/status";
 import {
 	formatLifecycleTransitionLine,
 	lifecycleTransition,
 	projectLifecycle,
-} from "../../maestro/core/lifecycle.ts";
+} from "@nubl/maestro/core/lifecycle";
 import {
 	WIDGET_INTERVAL_KEY,
 	STATUS_INTERVAL_KEY,
 	writeGlobalSlot,
 	type RunningSubagent,
 	type SubagentRuntime,
-} from "./state.ts";
+} from "@nubl/maestro/pi/subagents/state";
 import {
 	type Observation,
 	formatNoProgressAdvisoryLine,
-} from "./observation.ts";
+} from "@nubl/maestro/pi/subagents/observation";
 
 // ── Widget management ──
 
 function formatElapsedMMSS(startTime: number, endTime = Date.now()): string {
-	const seconds = Math.floor((endTime - startTime) / 1000);
-	const m = Math.floor(seconds / 60);
+	const seconds = Math.max(0, Math.floor((endTime - startTime) / 1000));
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
 	const s = seconds % 60;
-	return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+	return `${h > 0 ? `${h}:` : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 const ACTIVE_ACCENT = "\x1b[38;2;77;163;255m";
