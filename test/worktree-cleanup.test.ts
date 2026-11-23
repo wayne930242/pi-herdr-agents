@@ -209,8 +209,16 @@ describe("cleanup operating-system probes", () => {
 			assert.equal(state.ignoredFiles, 5000);
 			assert.equal(state.dirtyFiles, 0);
 			assert.equal(state.untrackedFiles, 0);
-			const realSpawn = childProcess.spawn;
+			const realSpawn: (...args: any[]) => any = childProcess.spawn;
+			const ignoredListing = [
+				"ls-files",
+				"--others",
+				"--ignored",
+				"--exclude-standard",
+				"-z",
+			];
 			for (const failure of ["partial", "missing"] as const) {
+				let ignoredCalls = 0;
 				const mocked = t.mock.method(
 					childProcess,
 					"spawn",
@@ -219,14 +227,14 @@ describe("cleanup operating-system probes", () => {
 						args: string[],
 						options: { timeout?: number; killSignal?: string },
 					) => {
-						assert.equal(file, "git");
-						assert.deepEqual(args, [
-							"ls-files",
-							"--others",
-							"--ignored",
-							"--exclude-standard",
-							"-z",
-						]);
+						// The other cleanup Git calls also spawn; only the ignored-file
+						// listing is replaced with a failing child.
+						if (
+							file !== "git" ||
+							JSON.stringify(args) !== JSON.stringify(ignoredListing)
+						)
+							return realSpawn(file, args, options);
+						ignoredCalls++;
 						assert.equal(options.timeout, 30_000);
 						assert.equal(options.killSignal, "SIGKILL");
 						return failure === "partial"
@@ -251,6 +259,7 @@ describe("cleanup operating-system probes", () => {
 							? /Ignored-file inspection failed.*exit 1/
 							: /ENOENT/,
 					);
+					assert.equal(ignoredCalls, 1);
 				} finally {
 					mocked.mock.restore();
 					syncBuiltinESMExports();
@@ -442,28 +451,46 @@ describe("cleanup operating-system probes", () => {
 			liveHolders: () => [],
 		});
 		const calls: string[] = [];
+		const realSpawn: (...args: any[]) => any = childProcess.spawn;
+		const hung: childProcess.ChildProcess[] = [];
+		// Cleanup Git runs through spawn; a child that never exits stands in
+		// for a hung Git so the mocked clock proves the 30s bound and SIGKILL.
 		const mocked = t.mock.method(
 			childProcess,
-			"execFileSync",
-			(
-				file: string,
-				_args: string[],
-				options: { timeout?: number; killSignal?: string },
-			) => {
-				assert.equal(options.timeout, 30_000);
-				assert.equal(options.killSignal, "SIGKILL");
+			"spawn",
+			(file: string, args: string[]) => {
+				assert.equal(file, "git");
+				assert.deepEqual(args, ["worktree", "list", "--porcelain", "-z"]);
 				calls.push(file);
-				throw new Error("ETIMEDOUT");
+				const child = realSpawn(
+					process.execPath,
+					["-e", "setInterval(() => {}, 1000)"],
+					{ stdio: ["ignore", "pipe", "pipe"] },
+				);
+				hung.push(child);
+				return child;
 			},
 		);
 		syncBuiltinESMExports();
+		t.mock.timers.enable({ apis: ["setTimeout"] });
 		try {
 			const f = cleanupFixture();
 			f.operations.inspectGit = ops.inspectGit;
-			const result = await removeContainedWorktree(f.input);
+			const pending = removeContainedWorktree(f.input);
+			for (let turn = 0; hung.length === 0; turn++) {
+				assert.ok(turn < 10_000, "cleanup never spawned Git");
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			t.mock.timers.tick(29_999);
+			assert.equal(hung[0].killed, false, "Git stopped before 30s");
+			t.mock.timers.tick(1);
+			assert.equal(hung[0].killed, true, "Git not stopped at 30s");
+			const result = await pending;
+			assert.equal(hung[0].signalCode, "SIGKILL");
 			assert.equal(result.status, "blocked");
 			assert.match(result.message, /ETIMEDOUT/);
 			assert.deepEqual(f.calls, []);
+			t.mock.timers.reset();
 			await __herdrTest__.withMockHerdrExec(
 				(_args, timeout, mode) => {
 					assert.equal(timeout, 30_000);
@@ -484,6 +511,8 @@ describe("cleanup operating-system probes", () => {
 			);
 			assert.deepEqual(calls, ["git", "herdr", "herdr"]);
 		} finally {
+			t.mock.timers.reset();
+			for (const child of hung) child.kill("SIGKILL");
 			mocked.mock.restore();
 			syncBuiltinESMExports();
 		}
@@ -585,7 +614,10 @@ describe("cleanup operating-system probes", () => {
 			chmodSync(hook, 0o755);
 			const entry = (await listContainedWorktrees(cleanupFixture().input))[0];
 			entry.path = dir;
-			assert.throws(() => ops.preserve(entry), /git commit|pre-commit/);
+			await assert.rejects(
+				async () => ops.preserve(entry),
+				/git commit|pre-commit/,
+			);
 			assert.ok(fs.existsSync(join(dir, ".git", "hook-ran")));
 			assert.deepEqual(readFileSync(join(dir, ".git", "index")), index);
 			assert.equal(git(["status", "--porcelain=v1"]), status);
@@ -601,7 +633,7 @@ describe("cleanup operating-system probes", () => {
 			assert.equal(entry.git.branch, "");
 			assert.match(cleanupBlockers(entry).join(), /Detached HEAD/);
 			entry.branch = entry.git.branch;
-			assert.throws(() => ops.preserve(entry), /Retained branch/);
+			await assert.rejects(async () => ops.preserve(entry), /Retained branch/);
 		} finally {
 			for (const [key, value] of Object.entries(savedEnv)) {
 				if (value === undefined) delete process.env[key];
@@ -697,7 +729,7 @@ describe("submodule source repositories", {
 					assert.doesNotMatch(readFileSync(shared, "utf8"), /worktree =/);
 				}
 
-				assert.equal(f.operations.resolveSource(f.worktree), f.source);
+				assert.equal(await f.operations.resolveSource(f.worktree), f.source);
 				const [row] = await listContainedWorktrees({
 					cwd: f.parent,
 					operations: f.operations,
@@ -745,8 +777,8 @@ describe("submodule source repositories", {
 				"core.worktree",
 				other,
 			]);
-			assert.throws(
-				() => f.operations.resolveSource(f.worktree),
+			await assert.rejects(
+				async () => f.operations.resolveSource(f.worktree),
 				/Source Git directory mismatch/,
 			);
 			const [row] = await listContainedWorktrees({
