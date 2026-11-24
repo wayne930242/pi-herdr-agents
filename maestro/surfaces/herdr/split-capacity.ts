@@ -13,6 +13,7 @@ export async function canSplitParent(
 	minimum: number,
 	timeout: number,
 ): Promise<boolean> {
+	if (direction === "down") return true;
 	try {
 		const result = parseHerdrJson(
 			await herdrExecAsync(["pane", "layout", "--pane", parent], timeout),
@@ -29,8 +30,7 @@ export async function canSplitParent(
 			(item) => isRecord(item) && item.pane_id === parent,
 		);
 		if (!isRecord(pane) || !isRecord(pane.rect)) return false;
-		const rect = pane.rect;
-		const cells = direction === "right" ? rect?.width : rect?.height;
+		const cells = pane.rect.width;
 		return (
 			isFiniteNumber(cells) &&
 			Number.isSafeInteger(cells) &&

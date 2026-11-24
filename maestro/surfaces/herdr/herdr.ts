@@ -1051,6 +1051,8 @@ export async function createHerdrSurfaceSplit(
 	const deadline = Deadline.after(HERDR_PLACEMENT_TIMEOUT_MS);
 	const paneId = await withPlacement(deadline, control?.signal, async () => {
 		const parentPaneId = process.env.HERDR_PANE_ID;
+		if (!parentPaneId && direction === "down")
+			throw new Error("HERDR_PANE_ID not set");
 		if (
 			!parentPaneId ||
 			!(await canSplitParent(

@@ -75,6 +75,6 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@nubl/maestro": "git+https://github.com/wayne930242/maestro.git#88660472ec02b4d0b050febe36a1f53b576b4978"
+    "@nubl/maestro": "git+https://github.com/wayne930242/maestro.git#ef5b8691bc453bcbb6ced2539e0dd78c50c946cf"
   }
 }

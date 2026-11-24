@@ -177,55 +177,92 @@ test("split launches without readable geometry use the grouped capacity", async 
 	});
 });
 
-for (const direction of ["right", "down"] as const) {
-	test(`overlapping ${direction} splits remeasure the parent inside the placement queue`, async (t) => {
-		process.env.HERDR_PANE_ID = "parent";
-		t.after(() => {
-			delete process.env.HERDR_PANE_ID;
-		});
-		const d = driver();
-		let size = 164;
-		let parentSplits = 0;
-		const provider = new HerdrSurfaceProvider({
-			paneConfig: { mode: "split", direction, maxPerTab: 2 },
-		});
-		await __herdrTest__.withMockHerdrExec(
-			async (args, timeout, mode) => {
-				if (args[0] === "pane" && args[1] === "layout") {
-					assert.deepEqual(args.slice(2), ["--pane", "parent"]);
-					const rect =
-						direction === "right"
-							? { width: size, height: 30 }
-							: { width: 30, height: size };
-					return json({
-						type: "pane_layout",
-						layout: { zoomed: false, panes: [{ pane_id: "parent", rect }] },
-					});
-				}
-				if (args[0] === "pane" && args[1] === "split" && args[2] === "parent") {
-					parentSplits++;
-					size = Math.floor(size / 2);
-					return json({ pane: { pane_id: `direct-${parentSplits}` } });
-				}
-				return d.exec(args, timeout, mode);
-			},
-			async () => {
-				await Promise.all(
-					Array.from({ length: 10 }, (_, i) =>
-						provider.createSurface({
-							name: `child-${i}`,
-							cwd: "/repo",
-							placement: { kind: "split", direction },
-						}),
-					),
-				);
-				assert.equal(parentSplits, 1);
-				assert.equal(size - 2, 80);
-				assert.deepEqual(d.counts(), { tabs: 5, splits: 4 });
-			},
-		);
+test("down splits target the caller without querying layout", async (t) => {
+	process.env.HERDR_PANE_ID = "parent";
+	t.after(() => {
+		delete process.env.HERDR_PANE_ID;
 	});
-}
+	const ops: string[] = [];
+	const d = driver();
+	const provider = new HerdrSurfaceProvider({
+		paneConfig: { mode: "split", direction: "down", maxPerTab: 2 },
+	});
+	await __herdrTest__.withMockHerdrExec(
+		async (args, timeout, mode) => {
+			ops.push(args.slice(0, 2).join(" "));
+			if (args[0] === "pane" && args[1] === "split" && args[2] === "parent")
+				return json({ pane: { pane_id: "direct" } });
+			return d.exec(args, timeout, mode);
+		},
+		async () => {
+			assert.equal(
+				await provider.createSurface({
+					name: "child",
+					cwd: "/repo",
+					placement: { kind: "split", direction: "down" },
+				}),
+				"direct",
+			);
+			assert.ok(!ops.includes("pane layout"));
+			delete process.env.HERDR_PANE_ID;
+			await assert.rejects(
+				provider.createSurface({
+					name: "child",
+					cwd: "/repo",
+					placement: { kind: "split", direction: "down" },
+				}),
+				/HERDR_PANE_ID not set/,
+			);
+			assert.deepEqual(d.counts(), { tabs: 0, splits: 0 });
+		},
+	);
+});
+
+test("overlapping right splits remeasure the parent inside the placement queue", async (t) => {
+	const direction = "right";
+	process.env.HERDR_PANE_ID = "parent";
+	t.after(() => {
+		delete process.env.HERDR_PANE_ID;
+	});
+	const d = driver();
+	let size = 164;
+	let parentSplits = 0;
+	const provider = new HerdrSurfaceProvider({
+		paneConfig: { mode: "split", direction, maxPerTab: 2 },
+	});
+	await __herdrTest__.withMockHerdrExec(
+		async (args, timeout, mode) => {
+			if (args[0] === "pane" && args[1] === "layout") {
+				assert.deepEqual(args.slice(2), ["--pane", "parent"]);
+				const rect = { width: size, height: 30 };
+				return json({
+					type: "pane_layout",
+					layout: { zoomed: false, panes: [{ pane_id: "parent", rect }] },
+				});
+			}
+			if (args[0] === "pane" && args[1] === "split" && args[2] === "parent") {
+				parentSplits++;
+				size = Math.floor(size / 2);
+				return json({ pane: { pane_id: `direct-${parentSplits}` } });
+			}
+			return d.exec(args, timeout, mode);
+		},
+		async () => {
+			await Promise.all(
+				Array.from({ length: 10 }, (_, i) =>
+					provider.createSurface({
+						name: `child-${i}`,
+						cwd: "/repo",
+						placement: { kind: "split", direction },
+					}),
+				),
+			);
+			assert.equal(parentSplits, 1);
+			assert.equal(size - 2, 80);
+			assert.deepEqual(d.counts(), { tabs: 5, splits: 4 });
+		},
+	);
+});
 
 test("user panes count toward capacity", async () => {
 	const d = driver();

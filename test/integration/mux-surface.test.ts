@@ -101,7 +101,7 @@ for (const backend of backends) {
 				}),
 			).result.pane;
 			const config = parsePaneConfig({
-				panes: { mode: "split", direction: "down", minSplitCols: 1 },
+				panes: { mode: "split", direction: "down" },
 			});
 			const createConfiguredPane = (name: string) =>
 				splitCurrentPane(name, config.direction, undefined, config);
