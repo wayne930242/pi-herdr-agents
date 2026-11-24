@@ -36,7 +36,8 @@ Create it by copying the installed package's `config.json.example`, or run
   "panes": {
     "mode": "grouped",
     "direction": "right",
-    "maxPerTab": 4
+    "maxPerTab": 4,
+    "minSplitCols": 80
   },
   "guidelines": {
     "launchRoster": true
@@ -623,7 +624,7 @@ placement in this milestone.
 
 Checkout matching uses Herdr's canonical `worktree.checkout_path` and includes descendant directories. A shell working directory never makes a workspace the target; it only keeps a child beside its caller. A child stays in the caller's workspace when that workspace is the match, or when the caller pane's own `cwd` or `foreground_cwd` lies inside the matched checkout (an unbound workspace running in the same project); it moves to the matched workspace only for a different project. If no checkout matches (including non-Git directories), placement uses the caller's workspace; overflow never creates a workspace. A reviewer with `cwd` set to a managed checkout joins that workspace without creating another worktree. Resume placement uses the saved session's cwd.
 
-Explicit `panes.mode: "tab"` preserves one new tab per ordinary child in the caller's workspace. Explicit `"split"` preserves splits of the stable parent pane. `panes.direction` is `"right"` (default) or `"down"` and applies to grouped and legacy splits. `maxPerTab` does not affect these legacy modes. Managed worktrees retain their separate workspaces.
+Explicit `panes.mode: "tab"` preserves one new tab per ordinary child in the caller's workspace. In `"split"` mode, Herdr splits the caller's pane only if the caller will retain at least `panes.minSplitCols` usable columns (`"right"`, the default direction) or rows (`"down"`). The minimum is a positive safe integer and defaults to `80`. Each launch checks the current layout. If space is insufficient or cannot be measured, the child opens in an Agents tab under the usual `maxPerTab` limit. The minimum protects the caller, not the size of panes inside Agents tabs. `panes.direction` applies to both split and grouped placement. Managed worktrees retain their separate workspaces.
 
 A process-local queue serializes placement inspection, creation, and ownership
 recording across reloads. It does not hold other launches through Git checkout or

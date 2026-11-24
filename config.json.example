@@ -21,7 +21,8 @@
   "panes": {
     "mode": "grouped",
     "direction": "right",
-    "maxPerTab": 4
+    "maxPerTab": 4,
+    "minSplitCols": 80
   },
   "guidelines": {
     "launchRoster": true

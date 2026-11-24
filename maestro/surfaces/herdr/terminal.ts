@@ -91,9 +91,10 @@ export function splitCurrentPane(
 	name: string,
 	direction: SplitDirection,
 	cwd?: string,
+	config?: import("@nubl/maestro/core/config/pane-config").PaneConfig,
 ): Promise<PaneId> {
 	assertTerminalAvailable();
-	return createHerdrSurfaceSplit(name, direction, cwd);
+	return createHerdrSurfaceSplit(name, direction, cwd, undefined, config);
 }
 
 export function renameCurrentTab(title: string): Promise<void> {

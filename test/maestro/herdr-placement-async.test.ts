@@ -9,6 +9,7 @@ import {
 	closeHerdrSurface,
 } from "../../maestro/surfaces/herdr/herdr.ts";
 import { AcquisitionUncertainError } from "@nubl/maestro/core/surface-provider";
+import { HerdrSurfaceProvider } from "../../maestro/surfaces/herdr/herdr-surface-provider.ts";
 import { Deadline } from "@nubl/maestro/core/deadline";
 
 import type { JsonObject } from "@nubl/maestro/core/config/type-guards";
@@ -147,6 +148,84 @@ test("unknown new tabs are never adopted by label or closed, even if they appear
 		assert.equal(d.panes.length, 2);
 	});
 });
+
+test("split launches without readable geometry use the grouped capacity", async (t) => {
+	process.env.HERDR_PANE_ID = "parent";
+	t.after(() => {
+		delete process.env.HERDR_PANE_ID;
+	});
+	const d = driver();
+	const provider = new HerdrSurfaceProvider({
+		paneConfig: {
+			mode: "split",
+			direction: "right",
+			minSplitCols: 80,
+			maxPerTab: 2,
+		},
+	});
+	await __herdrTest__.withMockHerdrExec(d.exec, async () => {
+		await Promise.all(
+			Array.from({ length: 6 }, (_, i) =>
+				provider.createSurface({
+					name: `child-${i}`,
+					cwd: "/repo",
+					placement: { kind: "split", direction: "right" },
+				}),
+			),
+		);
+		assert.deepEqual(d.counts(), { tabs: 3, splits: 3 });
+	});
+});
+
+for (const direction of ["right", "down"] as const) {
+	test(`overlapping ${direction} splits remeasure the parent inside the placement queue`, async (t) => {
+		process.env.HERDR_PANE_ID = "parent";
+		t.after(() => {
+			delete process.env.HERDR_PANE_ID;
+		});
+		const d = driver();
+		let size = 164;
+		let parentSplits = 0;
+		const provider = new HerdrSurfaceProvider({
+			paneConfig: { mode: "split", direction, maxPerTab: 2 },
+		});
+		await __herdrTest__.withMockHerdrExec(
+			async (args, timeout, mode) => {
+				if (args[0] === "pane" && args[1] === "layout") {
+					assert.deepEqual(args.slice(2), ["--pane", "parent"]);
+					const rect =
+						direction === "right"
+							? { width: size, height: 30 }
+							: { width: 30, height: size };
+					return json({
+						type: "pane_layout",
+						layout: { zoomed: false, panes: [{ pane_id: "parent", rect }] },
+					});
+				}
+				if (args[0] === "pane" && args[1] === "split" && args[2] === "parent") {
+					parentSplits++;
+					size = Math.floor(size / 2);
+					return json({ pane: { pane_id: `direct-${parentSplits}` } });
+				}
+				return d.exec(args, timeout, mode);
+			},
+			async () => {
+				await Promise.all(
+					Array.from({ length: 10 }, (_, i) =>
+						provider.createSurface({
+							name: `child-${i}`,
+							cwd: "/repo",
+							placement: { kind: "split", direction },
+						}),
+					),
+				);
+				assert.equal(parentSplits, 1);
+				assert.equal(size - 2, 80);
+				assert.deepEqual(d.counts(), { tabs: 5, splits: 4 });
+			},
+		);
+	});
+}
 
 test("user panes count toward capacity", async () => {
 	const d = driver();

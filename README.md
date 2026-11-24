@@ -319,7 +319,7 @@ The durable configuration file is `$PI_CODING_AGENT_DIR/herdr-agents/config.json
 | `persistent.maxAgents` | `3` | How many persistent specialists can stay open. |
 | `spawning.maxDepth` | `3` | Deepest child any launch may create (parent is depth `0`); deeper launches are refused. |
 | `supervision.forcePolling`, `supervision.hangWarningMinutes` | `false`, `15` | Supervision transport and no-progress advisories. |
-| `panes.mode`, `panes.direction`, `panes.maxPerTab` | `"grouped"`, `"right"`, `4` | Where legacy Herdr child panes open. |
+| `panes.mode`, `panes.direction`, `panes.maxPerTab`, `panes.minSplitCols` | `"grouped"`, `"right"`, `4`, `80` | Where legacy Herdr child panes open. Split mode uses an Agents tab if the caller would have too little space. |
 | `guidelines.launchRoster` | `true` | Whether the parent is asked to print a markdown roster table after launching a group. |
 | `outcomeLedger` | `true` | Whether each model attempt appends one line (no task text, output, or environment) to `herdr-agents/outcomes.jsonl`. |
 

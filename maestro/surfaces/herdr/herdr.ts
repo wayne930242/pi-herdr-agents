@@ -1,3 +1,8 @@
+import {
+	DEFAULT_MIN_SPLIT_COLS,
+	parsePaneConfig,
+} from "@nubl/maestro/core/config/pane-config";
+import { canSplitParent } from "./split-capacity.ts";
 import { placement, withPlacement } from "./placement-queue.ts";
 import { resolve, relative, isAbsolute, sep } from "node:path";
 import {
@@ -99,14 +104,6 @@ function extractHerdrWorktree(output: string): HerdrWorktreeSurface {
 		workspaceId: result.workspace.workspace_id,
 		paneId: result.root_pane.pane_id,
 	};
-}
-
-function getHerdrParentPaneId(): string {
-	const paneId = process.env.HERDR_PANE_ID;
-	if (!paneId) {
-		throw new Error("HERDR_PANE_ID not set");
-	}
-	return paneId;
 }
 
 function buildCurrentPaneArgs(): string[] {
@@ -386,8 +383,9 @@ export async function createHerdrGroupedSurface(
 	maxPerTab: number,
 	direction: "right" | "down",
 	control?: AcquisitionControl,
+	deadline = Deadline.after(HERDR_PLACEMENT_TIMEOUT_MS),
+	protectCallerTab = false,
 ): Promise<string> {
-	const deadline = Deadline.after(HERDR_PLACEMENT_TIMEOUT_MS);
 	const acquired = await withPlacement(deadline, control?.signal, async () => {
 		const caller = await getHerdrCurrentPaneInfo(deadline.remainingMs());
 		const callerWorkspace = caller.workspace_id;
@@ -424,7 +422,12 @@ export async function createHerdrGroupedSurface(
 		// Only inspect/create/record holds the reload-shared placement reservation.
 		let paneId: string | undefined;
 		for (const [tabId, owned] of agentsTabs) {
-			if (owned.workspaceId !== workspaceId || owned.uncertainSplit) continue;
+			if (
+				owned.workspaceId !== workspaceId ||
+				owned.uncertainSplit ||
+				(protectCallerTab && tabId === caller.tab_id)
+			)
+				continue;
 			const live = panes.filter(
 				(pane) => pane.tab_id === tabId && pane.workspace_id === workspaceId,
 			);
@@ -1043,11 +1046,22 @@ export async function createHerdrSurfaceSplit(
 	direction: "right" | "down",
 	cwd = process.cwd(),
 	control?: AcquisitionControl,
+	config = parsePaneConfig({}),
 ): Promise<string> {
 	const deadline = Deadline.after(HERDR_PLACEMENT_TIMEOUT_MS);
-	const parentPaneId = getHerdrParentPaneId();
-	const paneId = await withPlacement(deadline, control?.signal, () =>
-		mutate(
+	const paneId = await withPlacement(deadline, control?.signal, async () => {
+		const parentPaneId = process.env.HERDR_PANE_ID;
+		if (
+			!parentPaneId ||
+			!(await canSplitParent(
+				parentPaneId,
+				direction,
+				config.minSplitCols ?? DEFAULT_MIN_SPLIT_COLS,
+				deadline.remainingMs(),
+			))
+		)
+			return undefined;
+		return mutate(
 			buildPaneSplitArgs(parentPaneId, direction, cwd),
 			deadline,
 			{
@@ -1057,8 +1071,18 @@ export async function createHerdrSurfaceSplit(
 			},
 			(output) => extractHerdrPaneId(output, "pane split"),
 			control?.signal,
-		),
-	);
+		);
+	});
+	if (!paneId)
+		return createHerdrGroupedSurface(
+			name,
+			cwd,
+			config.maxPerTab,
+			direction,
+			control,
+			deadline,
+			true,
+		);
 	await renamePane(paneId, name);
 	return paneId;
 }

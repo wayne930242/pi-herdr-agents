@@ -101,10 +101,10 @@ for (const backend of backends) {
 				}),
 			).result.pane;
 			const config = parsePaneConfig({
-				panes: { mode: "split", direction: "down" },
+				panes: { mode: "split", direction: "down", minSplitCols: 1 },
 			});
 			const createConfiguredPane = (name: string) =>
-				splitCurrentPane(name, config.direction);
+				splitCurrentPane(name, config.direction, undefined, config);
 			const previousParentPane = process.env.HERDR_PANE_ID;
 			let child: string | undefined;
 			try {

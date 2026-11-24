@@ -42,7 +42,9 @@ Desktop presentation is separate and not yet implemented.
   asynchronous exec, JSON, availability, test exec hook), `herdr-pane.ts`
   (pane inspection, process info, readiness and absence waits), and
   `herdr.ts` (placement, worktrees, the opened-primary report, pane
-  commands). On Windows a launch script runs through an absolute bash path
+  commands). `placement-queue.ts` serializes placement across reloads;
+  `split-capacity.ts` reads the parent layout inside that reservation before
+  a split. On Windows a launch script runs through an absolute bash path
   spelled for the pane's shell (`@nubl/maestro/core/script-launch` builds the
   PowerShell, cmd or Git Bash line; `terminal.ts` reads the shell from
   `pane process-info`; `@nubl/maestro/adapters/pi/script-shell` resolves the

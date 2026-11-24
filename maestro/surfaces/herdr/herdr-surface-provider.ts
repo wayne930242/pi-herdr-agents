@@ -78,6 +78,7 @@ export class HerdrSurfaceProvider implements SurfaceProvider {
 				placement.direction,
 				opts.cwd,
 				opts,
+				this.#paneConfig,
 			);
 		}
 		return createHerdrSurface(opts.name, opts.cwd, opts);
