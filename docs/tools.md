@@ -195,6 +195,7 @@ subagent({
 | `systemPrompt` | string | no | Role/system-prompt text for a bare spawn. Named agents keep their definition body. |
 | `model` | string | no | Exact authenticated provider/model-id, a comma-separated fallback list, or task:\<category> as the whole value. Worktree launches take one model: a task: category uses its first candidate, and fallback lists are rejected. For ordinary review, prefer a different authenticated model family. When no other authenticated model family is available, ordinary review may use a same-family reviewer in a fresh standalone session. Disclose that this review is context-isolated, not cross-family independent. Cross-family verification must not use this fallback. Omitting uses the role's model, then the configured models.agents entry and models.default, then the parent model. |
 | `thinking` | `"off"` \| `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` | no | Pi thinking level, within the chosen model's supported range. Overrides task-category thinking (clamped per candidate), then role thinking, then parent. Use low for mechanical work, medium for ordinary work, and high+ for hard work. Omitting uses task-category thinking, then the role's thinking, otherwise the parent level; an installed extension may set the child's level from solutionSpace instead. |
+| `item` | string | no | Todo uid or \<session8>#\<id> this launch works on. |
 | `solutionSpace` | string | no | One or two sentences on how open-ended the work is, not the work itself: whether the fix or design is given, or which causes or designs remain open. The child receives it as PI_SUBAGENT_SOLUTION_SPACE, where an installed extension can choose the child's thinking level from it. |
 | `skills` | string | no | Comma-separated skills (overrides agent default) |
 | `tools` | string | no | Comma-separated tools (overrides agent default) |
@@ -230,6 +231,9 @@ through a task artifact file referenced with `@path`. A full-context fork
 (`fork: true`) receives only the raw task, so its `systemPrompt` is dropped. Set
 `fork: false` when a bare child must receive reference or role text through
 `systemPrompt`.
+
+Pass `item` to link a launch to a todo: use its uid (for example, `t_abcdef2345`) or the first eight hex digits of its session id plus its local task number (`01a2130c#12`).
+The launch acknowledgement returns that same key in `details.item`; later `subagent_send` calls do not inherit it.
 
 ### Naming coordinated children
 

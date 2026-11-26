@@ -70,6 +70,11 @@
 							{ "const": "max", "type": "string" }
 						]
 					},
+					"item": {
+						"pattern": "^(?:t_[A-Za-z2-7]{10}|[0-9a-fA-F]{8}#[1-9][0-9]*)$",
+						"description": "Todo uid or <session8>#<id> this launch works on.",
+						"type": "string"
+					},
 					"solutionSpace": {
 						"description": "One or two sentences on how open-ended the work is, not the work itself: whether the fix or design is given, or which causes or designs remain open. The child receives it as PI_SUBAGENT_SOLUTION_SPACE, where an installed extension can choose the child's thinking level from it.",
 						"type": "string"

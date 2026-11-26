@@ -372,10 +372,11 @@ Every launched child receives `PI_SUBAGENT_DEPTH=<parent depth + 1>`, and a `/wo
 
 ## Outcome ledger
 
-The parent appends one JSON line per model attempt to `$PI_CODING_AGENT_DIR/herdr-agents/outcomes.jsonl`, defaulting to `~/.pi/agent/herdr-agents/outcomes.jsonl`. A fallback model attempt gets its own line. Checked and unchecked runs are both recorded, so later routing tools have data from every run; nothing reads the file yet.
+The parent appends one JSON line per model attempt to `$PI_CODING_AGENT_DIR/herdr-agents/outcomes.jsonl`, defaulting to `~/.pi/agent/herdr-agents/outcomes.jsonl`. Checked and unchecked runs are both recorded.
+Each fallback attempt gets its own line with the same `name` (run label), `parent` (launching session id), and, if supplied, `item` (todo reference).
 
 ```json
-{"v":1,"at":"2026-10-30T16:52:03.000Z","runId":"a1b2c3d4","attempt":1,"role":"worker","requestedModel":"task:implementation","category":"implementation","model":"provider/model-id","thinking":"medium","elapsedSec":252,"outcome":"completed","checkTries":2,"verdict":"rejected","checkHash":"sha256:9f2c…"}
+{"v":1,"at":"2026-10-30T16:52:03.000Z","runId":"a1b2c3d4","name":"parser-test","parent":"01a2130c-b6fb-72a9-b04f-bed99d365c74","item":"01a2130c#12","attempt":1,"role":"worker","requestedModel":"task:implementation","category":"implementation","model":"provider/model-id","thinking":"medium","elapsedSec":252,"outcome":"completed","checkTries":2,"verdict":"rejected","checkHash":"sha256:9f2c…"}
 ```
 
 `outcome` is `completed`, `failed`, `help`, or `cancelled`; `verdict` is one of the [accept-check verdicts](tools.md#accept-checks) (`none` without a check). `role` is absent for a bare launch, `category` appears only for a `task:<category>` model request, and `checkTries` and `checkHash` only when a check was requested. A line never holds the task text, the check output, environment values, or the check command: `checkHash` is the SHA-256 of the command, so runs of the same check group together without it being readable. The file is not rotated. A write failure never changes or delays a delivery.

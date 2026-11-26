@@ -514,11 +514,13 @@ Structured details keep up to 4,000 raw characters in `accept.output`.
 The host appends one line per model attempt to
 `$PI_CODING_AGENT_DIR/herdr-agents/outcomes.jsonl` (`accept-recheck.ts`
 `appendOutcomeLedger`), unless `outcomeLedger` is `false`. Its keys are `v`,
-`at`, `runId`, `attempt`, `role`, `requestedModel`, `category`, `model`,
+`at`, `runId`, `name`, `parent`, `item`, `attempt`, `role`, `requestedModel`, `category`, `model`,
 `thinking`, `elapsedSec`, `outcome`, `checkTries`, `verdict`, and `checkHash`
 (`accept.ts` `buildOutcomeLedgerLine`). It never holds task text, check output,
 environment values, or the command; `checkHash` is the command's SHA-256. It is
 local host evidence, not part of the delivery.
+`name` is the run label and `parent` is the full id of the Pi session that launched the run, even when a fallback starts after session replacement.
+`item` is present only if the caller supplied a todo reference; older rows may lack all three fields.
 
 ## Conformance
 
