@@ -58,6 +58,24 @@ and the host should have activated the routine tools at session start:
 
 See [Tool loading](tools.md#tool-loading) for the full rules.
 
+## Tools are missing after `/reload` following an update
+
+Pi re-reads this package's TypeScript on `/reload`, but Node keeps the
+compiled `@nubl/maestro` modules it imported first for the life of the
+process. Without a guard, a reload after the install moves in place runs the
+new package against the old engine, and a module that reads a new export
+fails at import: Pi reports `Failed to load extension` (for example `Cannot
+read properties of undefined (reading 'source')`) and registers none of this
+package's tools.
+
+The entry now loads a different maestro build under fresh module URLs, so
+`/reload` after an update works, also in a process that first loaded a
+release without this guard. Each such reload keeps the previous build's
+modules in memory until Pi restarts. Restart Pi instead of reloading when:
+
+- the load error says `registerHooks` is missing (Node.js before 22.15); or
+- you move back to a release without this guard.
+
 ## An acquisition or dispatch is uncertain
 
 Do not repeat the launch immediately. A timed-out Herdr client does not establish

@@ -1,3 +1,5 @@
+// weihung fork: first, so a reload into another maestro build loads it fresh.
+import "./engine-build.ts";
 import { createChildExtension } from "@nubl/maestro/pi/child";
 import { renderChildWidget } from "./child-widget.ts";
 

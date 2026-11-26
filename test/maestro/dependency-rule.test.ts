@@ -191,7 +191,11 @@ function isForbiddenEdge(root: string, reference: ModuleReference) {
 		["pi-extension/subagents/child-widget.ts", ["@nubl/maestro/pi/child"]],
 		[
 			"maestro/adapters/pi/child/subagent-done.ts",
-			["../../../../pi-extension/subagents/child.ts"],
+			[
+				"../../../../pi-extension/subagents/child.ts",
+				// weihung fork: first import of every entry, before any maestro module.
+				"../../../../pi-extension/subagents/engine-build.ts",
+			],
 		],
 	]);
 	if (hostEdges.get(toRepoPath(root, reference.file))?.includes(specifier))

@@ -167,7 +167,7 @@ describe("pack-neutral package contents", () => {
 			loaded.add(path);
 			const source = readFileSync(join(root, path), "utf8");
 			for (const [, specifier] of source.matchAll(
-				/(?:from\s+|import\(\s*|new URL\(\s*)"(\.{1,2}\/[^"]+\.ts)"/g,
+				/(?:from\s+|import\s+|import\(\s*|new URL\(\s*)"(\.{1,2}\/[^"]+\.ts)"/g,
 			))
 				visit(join(dirname(path), specifier).split("\\").join("/"));
 		};

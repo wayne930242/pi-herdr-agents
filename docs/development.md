@@ -22,6 +22,15 @@ Desktop presentation is separate and not yet implemented.
   the child wrapper path and the package root for `config.json.example`. It
   re-exports the `__test__` surface. Each `/reload` re-imports it, so config
   and timers are never shared between loads.
+- `pi-extension/subagents/engine-build.ts` — the first import of every entry
+  Pi loads (`index.ts`, `child.ts` and the legacy child path). Pi re-reads
+  this package's TypeScript on `/reload`, but Node keeps the compiled
+  `@nubl/maestro` modules it imported natively for the life of the process.
+  Each load records the installed maestro build; when it differs from the one
+  the process holds, a `node:module` resolve hook tags maestro's file URLs
+  with `?engine-build=<tag>`, so the new build loads from disk instead of
+  mixing with the old one. The first load and same-build reloads keep plain
+  URLs and the modules already loaded.
 - `pi-extension/subagents/host-surface.ts`, `marker-transport.ts` — the
   terminal host's runtime composition: legacy/Core binding selection, the
   owning provider, the per-launch legacy pane provider with that launch's

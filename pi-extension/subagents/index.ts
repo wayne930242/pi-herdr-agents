@@ -1,3 +1,5 @@
+// weihung fork: first, so a reload into another maestro build loads it fresh.
+import "./engine-build.ts";
 import { fileURLToPath } from "node:url";
 import { createPiExtension, maestroBuildInfo } from "@nubl/maestro/pi";
 import { hostSurfaceBinding } from "./host-surface.ts";
