@@ -29,7 +29,10 @@ const stampSources: StampSources = {
 
 // Invoke per load, not in the engine cache. Presentation never replaces a run owner.
 // weihung fork: each factory call stamps the load; a creation that throws does too.
-const rows = new RunRows();
+const presenters = new WeakMap<
+	Parameters<typeof registerMessageRenderers>[0],
+	RunRows
+>();
 let registerRows: (pi: Parameters<typeof registerMessageRenderers>[0]) => void;
 const extension = stampedOnFailure(
 	() =>
@@ -38,9 +41,12 @@ const extension = stampedOnFailure(
 			presentation: {
 				borderLine,
 				createWidgets: (deps) => {
-					registerRows = (pi) =>
+					registerRows = (pi) => {
+						const rows = new RunRows();
+						presenters.set(pi, rows);
 						rows.register(pi, deps.runtime.runningSubagents);
-					return createWidgetController(deps, rows);
+					};
+					return createWidgetController(deps, presenters);
 				},
 				registerMessageRenderers,
 				toolRenderers,

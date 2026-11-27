@@ -11,6 +11,7 @@ interface Probe {
 }
 
 it("publishes detached live rows; only fresh claims hide widget rows", (t) => {
+	t.mock.method(performance, "now", () => 97_000);
 	t.mock.timers.enable({ apis: ["Date"], now: 1000 });
 	const { api } = createMockExtensionApi();
 	host(api);
@@ -52,10 +53,65 @@ it("publishes detached live rows; only fresh claims hide widget rows", (t) => {
 	assert.deepEqual(draw(), []);
 	probe({ by: "ledger", ids: [] });
 	assert.match(draw()[1], /Alpha/);
-	t.mock.timers.tick(3000);
+	t.mock.timers.setTime(10);
+	t.mock.method(performance, "now", () => 100_000);
 	const expired = draw();
 	probe({ by: "other", ids: [] });
 	assert.deepEqual(expired, draw());
 	assert.equal(expired.length, original.length);
 	assert.match(expired[0], /2 active/);
+});
+
+it("does not share leases or shutdown between two APIs", async (t) => {
+	const a = createMockExtensionApi();
+	const b = createMockExtensionApi();
+	const run = {
+		id: "x",
+		name: "Worker",
+		runtimePlan: undefined,
+		task: "",
+		surface: "s",
+		startTime: 1000,
+		sessionFile: "unused",
+		interactive: false,
+		lifecycle: createLifecycle(1000),
+	};
+	__test__.runningSubagents.set(run.id, run);
+	t.after(() => __test__.runningSubagents.clear());
+	const start = async (instance: typeof a) => {
+		let widget!: () => { render(width: number): string[] };
+		const ctx = {
+			hasUI: true,
+			modelRegistry: { getAvailable: () => [], find: () => undefined },
+			ui: {
+				notify() {},
+				setWidget(_key: string, factory: typeof widget) {
+					widget = factory;
+				},
+			},
+		};
+		for (const handler of instance.eventHandlers.get("session_start")!)
+			await handler({}, ctx);
+		const component = widget();
+		return () => component.render(100);
+	};
+	const claim = { claim: { by: "ledger", ids: [run.id] } };
+	host(a.api);
+	const drawA = await start(a);
+	a.api.events.emit("pi-herdr-agents:run-rows:v1", claim);
+	assert.deepEqual(drawA(), []);
+	host(b.api);
+	const drawB = await start(b);
+	assert.deepEqual(drawA(), []);
+	assert.match(drawB().join("\n"), /Worker/);
+	b.api.events.emit("pi-herdr-agents:run-rows:v1", claim);
+	for (const shutdown of a.eventHandlers.get("session_shutdown")!)
+		await shutdown({ reason: "reload" });
+	assert.deepEqual(drawB(), []);
+	assert.match(drawA().join("\n"), /Worker/);
+	for (const shutdown of b.eventHandlers.get("session_shutdown")!)
+		await shutdown({ reason: "reload" });
+	const detached: Probe = {};
+	a.api.events.emit("pi-herdr-agents:run-rows:v1", detached);
+	assert.equal(detached.rows, undefined);
 });

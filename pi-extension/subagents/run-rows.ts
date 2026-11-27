@@ -8,8 +8,8 @@ export class RunRows {
 		for (const [key, c] of this.claims)
 			if (c.expires <= now) this.claims.delete(key);
 	}
-	claimed(now: number) {
-		this.prune(now);
+	claimed() {
+		this.prune(performance.now());
 		return new Set([...this.claims.values()].flatMap((c) => [...c.ids]));
 	}
 	register(pi: ExtensionAPI, runs: Map<string, RunningSubagent>) {
@@ -18,7 +18,8 @@ export class RunRows {
 		const off = pi.events.on("pi-herdr-agents:run-rows:v1", (raw) => {
 			if (!raw || typeof raw !== "object") return;
 			const now = Date.now();
-			this.prune(now);
+			const leaseTime = performance.now();
+			this.prune(leaseTime);
 			const rows = Array.from(runs.values(), (r) => {
 				const {
 					kind,
@@ -62,7 +63,7 @@ export class RunRows {
 					(id): id is string => typeof id === "string" && runs.has(id),
 				),
 			);
-			if (ids.size) this.claims.set(c.by, { ids, expires: now + 3000 });
+			if (ids.size) this.claims.set(c.by, { ids, expires: leaseTime + 3000 });
 			else this.claims.delete(c.by);
 		});
 		/* oxlint-enable anti-slop/no-runtime-typeof */

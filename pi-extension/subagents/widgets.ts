@@ -1,4 +1,4 @@
-import { RunRows } from "./run-rows.ts";
+import type { RunRows } from "./run-rows.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { SupervisionConfig } from "@nubl/maestro/core/config/supervision-config";
@@ -157,7 +157,7 @@ export function createWidgetController(
 		observeRunningSubagent,
 		evaluateNoProgressAdvisory,
 	}: WidgetDeps,
-	rows = new RunRows(),
+	presenters = new WeakMap<ExtensionAPI, RunRows>(),
 ) {
 	const runningSubagents = runtime.runningSubagents;
 
@@ -170,10 +170,12 @@ export function createWidgetController(
 	function renderSubagentWidgetLines(
 		agents: RunningSubagent[],
 		width: number,
+		presenter: RunRows | null | undefined = runtime.pi &&
+			presenters.get(runtime.pi),
 	): string[] {
 		const now = Date.now();
-		const claimed = rows.claimed(now);
-		const visible = agents.filter((a) => !claimed.has(a.id));
+		const claimed = presenter?.claimed();
+		const visible = agents.filter((a) => !claimed?.has(a.id));
 		const hidden = agents.length - visible.length;
 		if (hidden && !visible.length) return [];
 		const rendered = visible.map((agent) => ({
@@ -251,6 +253,8 @@ export function createWidgetController(
 			return;
 		}
 
+		// A widget can render again after another API becomes live.
+		const presenter = runtime.liveApi && presenters.get(runtime.liveApi);
 		latestCtx.ui.setWidget(
 			"subagent-status",
 			(_tui: any, _theme: any) => {
@@ -260,6 +264,7 @@ export function createWidgetController(
 						return renderSubagentWidgetLines(
 							Array.from(runningSubagents.values()),
 							width,
+							presenter ?? null,
 						);
 					},
 				};
