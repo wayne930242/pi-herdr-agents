@@ -254,7 +254,11 @@ export function createWidgetController(
 		}
 
 		// A widget can render again after another API becomes live.
-		const presenter = runtime.liveApi && presenters.get(runtime.liveApi);
+		// Maestro's deferred and error-encoding tool APIs inherit from the
+		// registered API. Follow that chain, not the last registered runtime.pi.
+		let api: ExtensionAPI | null = runtime.liveApi ?? null;
+		while (api && !presenters.has(api)) api = Object.getPrototypeOf(api);
+		const presenter = api && presenters.get(api);
 		latestCtx.ui.setWidget(
 			"subagent-status",
 			(_tui: any, _theme: any) => {

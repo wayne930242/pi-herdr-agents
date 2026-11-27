@@ -1,6 +1,11 @@
 import "../clean-host-env.ts";
 import assert from "node:assert/strict";
 import { it } from "node:test";
+import {
+	readGlobalSlot,
+	RUNTIME_KEY,
+	type SubagentRuntime,
+} from "@nubl/maestro/pi/subagents/state";
 import { createLifecycle } from "@nubl/maestro/core/lifecycle";
 import host, { __test__ } from "../../pi-extension/subagents/index.ts";
 import { createMockExtensionApi } from "../helpers/mock-extension-api.ts";
@@ -78,6 +83,7 @@ it("does not share leases or shutdown between two APIs", async (t) => {
 	};
 	__test__.runningSubagents.set(run.id, run);
 	t.after(() => __test__.runningSubagents.clear());
+	const runtime = readGlobalSlot<SubagentRuntime>(RUNTIME_KEY)!;
 	const start = async (instance: typeof a) => {
 		let widget!: () => { render(width: number): string[] };
 		const ctx = {
@@ -93,15 +99,42 @@ it("does not share leases or shutdown between two APIs", async (t) => {
 		for (const handler of instance.eventHandlers.get("session_start")!)
 			await handler({}, ctx);
 		const component = widget();
-		return () => component.render(100);
+		return {
+			draw: () => component.render(100),
+			ctx,
+			latest: () => widget().render(100),
+		};
 	};
 	const claim = { claim: { by: "ledger", ids: [run.id] } };
 	host(a.api);
-	const drawA = await start(a);
+	const { draw: drawA, ctx, latest } = await start(a);
 	a.api.events.emit("pi-herdr-agents:run-rows:v1", claim);
 	assert.deepEqual(drawA(), []);
 	host(b.api);
-	const drawB = await start(b);
+	const { draw: drawB } = await start(b);
+	// A tool from A can repaint after B registered. Use the real deferred and
+	// encoded tool wrappers; stop before the session creates a terminal pane.
+	t.mock.method(runtime.session!, "availability", () => ({ available: true }));
+	t.mock.method(runtime.session!, "resumePi", async () => {
+		throw new Error("test launch boundary");
+	});
+	await assert.rejects(
+		a.registeredTools
+			.find((tool) => tool.name === "subagent_resume")
+			.execute(
+				"resume",
+				{ sessionPath: import.meta.filename, message: "test" },
+				undefined,
+				undefined,
+				ctx,
+			),
+		/test launch boundary/,
+	);
+	assert.ok(runtime.liveApi);
+	assert.notEqual(runtime.liveApi, a.api);
+	assert.ok(Object.prototype.isPrototypeOf.call(a.api, runtime.liveApi));
+	__test__.updateWidget();
+	assert.deepEqual(latest(), []);
 	assert.deepEqual(drawA(), []);
 	assert.match(drawB().join("\n"), /Worker/);
 	b.api.events.emit("pi-herdr-agents:run-rows:v1", claim);
