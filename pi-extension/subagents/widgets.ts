@@ -1,3 +1,4 @@
+import { RunRows } from "./run-rows.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { SupervisionConfig } from "@nubl/maestro/core/config/supervision-config";
@@ -148,13 +149,16 @@ interface WidgetDeps {
 }
 
 /** Widget and status refresh timers for one extension instance. */
-export function createWidgetController({
-	runtime,
-	statusConfig,
-	supervisionConfig,
-	observeRunningSubagent,
-	evaluateNoProgressAdvisory,
-}: WidgetDeps) {
+export function createWidgetController(
+	{
+		runtime,
+		statusConfig,
+		supervisionConfig,
+		observeRunningSubagent,
+		evaluateNoProgressAdvisory,
+	}: WidgetDeps,
+	rows = new RunRows(),
+) {
 	const runningSubagents = runtime.runningSubagents;
 
 	/** Interval timer for widget re-renders. */
@@ -168,7 +172,11 @@ export function createWidgetController({
 		width: number,
 	): string[] {
 		const now = Date.now();
-		const rendered = agents.map((agent) => ({
+		const claimed = rows.claimed(now);
+		const visible = agents.filter((a) => !claimed.has(a.id));
+		const hidden = agents.length - visible.length;
+		if (hidden && !visible.length) return [];
+		const rendered = visible.map((agent) => ({
 			agent,
 			projection: projectLifecycle(agent.lifecycle, now),
 		}));
@@ -179,7 +187,7 @@ export function createWidgetController({
 				projection.kind === "running" ||
 				projection.kind === "blocked",
 		).length;
-		const openCount = agents.length - activeCount;
+		const openCount = visible.length - activeCount;
 		const info =
 			activeCount > 0
 				? openCount > 0
@@ -188,7 +196,14 @@ export function createWidgetController({
 				: `${openCount} open`;
 		const accent = activeCount > 0 ? ACTIVE_ACCENT : OPEN_ACCENT;
 
-		const lines: string[] = [borderTop("Subagents", info, width, accent)];
+		const lines: string[] = [
+			borderTop(
+				"Subagents",
+				hidden ? `${info} · ${hidden} on todos` : info,
+				width,
+				accent,
+			),
+		];
 
 		for (const { agent, projection } of rendered) {
 			const elapsed = formatElapsedMMSS(

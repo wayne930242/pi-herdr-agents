@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createPiExtension, maestroBuildInfo } from "@nubl/maestro/pi";
 import { hostSurfaceBinding } from "./host-surface.ts";
 import { borderLine, createWidgetController } from "./widgets.ts";
+import { RunRows } from "./run-rows.ts";
 import { registerMessageRenderers } from "./renderers.ts";
 import { toolRenderers } from "./tool-renderers.ts";
 import {
@@ -28,13 +29,19 @@ const stampSources: StampSources = {
 
 // Invoke per load, not in the engine cache. Presentation never replaces a run owner.
 // weihung fork: each factory call stamps the load; a creation that throws does too.
+const rows = new RunRows();
+let registerRows: (pi: Parameters<typeof registerMessageRenderers>[0]) => void;
 const extension = stampedOnFailure(
 	() =>
 		createPiExtension({
 			hostSurface: hostSurfaceBinding,
 			presentation: {
 				borderLine,
-				createWidgets: createWidgetController,
+				createWidgets: (deps) => {
+					registerRows = (pi) =>
+						rows.register(pi, deps.runtime.runningSubagents);
+					return createWidgetController(deps, rows);
+				},
 				registerMessageRenderers,
 				toolRenderers,
 			},
@@ -53,5 +60,9 @@ export const __test__ = extension.__test__;
 export default function piHerdrAgents(
 	...args: Parameters<typeof extension>
 ): ReturnType<typeof extension> {
-	return stampedLoad(() => extension(...args), stampSources);
+	return stampedLoad(() => {
+		const result = extension(...args);
+		registerRows(args[0]);
+		return result;
+	}, stampSources);
 }

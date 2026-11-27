@@ -20,7 +20,7 @@
 				"subagent_notice",
 				"subagent_ping"
 			],
-			"handlers": [["session_start", 1], ["session_shutdown", 3]]
+			"handlers": [["session_start", 1], ["session_shutdown", 4]]
 		}
 	],
 	"result": {

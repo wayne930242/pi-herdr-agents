@@ -755,7 +755,7 @@
 			"subagent_ping"
 		],
 		"shortcuts": [],
-		"events": [["session_start", 1], ["session_shutdown", 3]]
+		"events": [["session_start", 1], ["session_shutdown", 4]]
 	},
 	"child": {
 		"exports": [
@@ -901,6 +901,6 @@
 			"subagent_ping"
 		],
 		"shortcuts": [],
-		"events": [["session_start", 1], ["session_shutdown", 1]]
+		"events": [["session_start", 1], ["session_shutdown", 2]]
 	}
 }

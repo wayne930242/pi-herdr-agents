@@ -147,6 +147,12 @@ model fallback; an observed terminal ID alone does not confer ownership.
 
 Status labels, the stall watchdog, and no-progress advisories are described in [In-progress status updates](docs/tools.md#in-progress-status-updates) and [Supervision transport](docs/configuration.md#supervision-transport).
 
+### Live run rows (fork)
+
+Emit `pi-herdr-agents:run-rows:v1` on `pi.events` with a mutable object. Before `emit` returns, the host sets its `rows` property to `{ version: 1, rows: [...] }`, including when there are no runs. Each row is a snapshot: `{ id, name, agent?, model?, thinking?, startedAt, phase: { kind, label?, since? }, cancel? }`. Times are Unix milliseconds; `cancel` is `requested` or `unconfirmed`.
+
+To avoid duplicate rows, include `claim: { by: presenterId, ids: [...] }` with only the IDs drawn in the previous frame. Each claim replaces that presenter's previous list; `ids: []` releases it immediately. Claims expire after three seconds. Claimed rows remain in the snapshot but not in the Subagents widget. The widget counts them as `on todos` and disappears when all rows are claimed.
+
 ## Tools and commands
 
 The parent session gets these tools:
